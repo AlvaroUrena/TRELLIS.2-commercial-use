@@ -321,13 +321,13 @@ class PbrMeshRenderer:
                 rast, rast_db = peeler.rasterize_next_layer()
                 
                 # Pos
-                pos = interpolate(vertices, rast, faces)[0][0]
+                pos = interpolate(vertices, rast, faces, peeler=peeler)[0][0]
                 
                 # Depth
-                gb_depth = interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces)[0][0]
+                gb_depth = interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces, peeler=peeler)[0][0]
                         
                 # Normal
-                gb_normal = interpolate(face_normal.unsqueeze(0), rast, torch.arange(face_normal.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous())[0][0]
+                gb_normal = interpolate(face_normal.unsqueeze(0), rast, torch.arange(face_normal.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous(), peeler=peeler)[0][0]
                 gb_normal = torch.where(
                     torch.sum(gb_normal * (pos - rays_o), dim=-1, keepdim=True) > 0,
                     -gb_normal,
@@ -344,7 +344,7 @@ class PbrMeshRenderer:
                     if 'grid_sample_3d' not in globals():
                         from flex_gemm.ops.grid_sample import grid_sample_3d
                     mask = rast[..., -1:] > 0
-                    xyz = interpolate(vertices_orig, rast, faces)[0]
+                    xyz = interpolate(vertices_orig, rast, faces, peeler=peeler)[0]
                     xyz = ((xyz - mesh.origin) / mesh.voxel_size).reshape(1, -1, 3)
                     img = grid_sample_3d(
                         mesh.attrs,
@@ -367,6 +367,7 @@ class PbrMeshRenderer:
                         rast,
                         torch.arange(mesh.uv_coords.shape[0] * 3, dtype=torch.int, device=self.device).reshape(-1, 3),
                         rast_db=rast_db,
+                        peeler=peeler,
                     )
                     texc = torch.nan_to_num(texc, nan=0.0, posinf=1e3, neginf=-1e3)
                     texc = torch.clamp(texc, min=-1e3, max=1e3)

@@ -143,21 +143,21 @@ class MeshRenderer:
                     img = (rast[..., -1:] > 0).float()
                     if antialias: img = antialias(img, rast, vertices_clip, faces)
                 elif type == "depth":
-                    img = interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces)[0]
+                    img = interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces, ctx=self.glctx)[0]
                     if antialias: img = antialias(img, rast, vertices_clip, faces)
                 elif type == "normal" :
-                    img = interpolate(face_normal.unsqueeze(0), rast, torch.arange(face_normal.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous())[0]
+                    img = interpolate(face_normal.unsqueeze(0), rast, torch.arange(face_normal.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous(), ctx=self.glctx)[0]
                     if antialias: img = antialias(img, rast, vertices_clip, faces)
                     img = (img + 1) / 2
                 elif type == "coord":
-                    img = interpolate(vertices, rast, faces)[0]
+                    img = interpolate(vertices, rast, faces, ctx=self.glctx)[0]
                     if antialias: img = antialias(img, rast, vertices_clip, faces)
                 elif type == "attr":
                     if isinstance(mesh, MeshWithVoxel):
                         if 'grid_sample_3d' not in globals():
                             from flex_gemm.ops.grid_sample import grid_sample_3d
                         mask = rast[..., -1:] > 0
-                        xyz = interpolate(vertices, rast, faces)[0]
+                        xyz = interpolate(vertices, rast, faces, ctx=self.glctx)[0]
                         xyz = ((xyz - mesh.origin) / mesh.voxel_size).reshape(1, -1, 3)
                         img = grid_sample_3d(
                             mesh.attrs,
@@ -176,6 +176,7 @@ class MeshRenderer:
                             rast,
                             torch.arange(mesh.uv_coords.shape[0] * 3, dtype=torch.int, device=self.device).reshape(-1, 3),
                             rast_db=rast_db,
+                            ctx=self.glctx,
                         )
                         texc = torch.nan_to_num(texc, nan=0.0, posinf=1e3, neginf=-1e3)
                         texc = torch.clamp(texc, min=-1e3, max=1e3)
@@ -274,19 +275,19 @@ class MeshRenderer:
                     if type == "mask" :
                         img = (rast[..., -1:] > 0).float()
                     elif type == "depth":
-                        img = interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces_chunk)[0]
+                        img = interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces_chunk, ctx=self.glctx)[0]
                     elif type == "normal" :
                         face_normal_chunk = face_normal[i:i+chunk_size]
-                        img = interpolate(face_normal_chunk.unsqueeze(0), rast, torch.arange(face_normal_chunk.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous())[0]
+                        img = interpolate(face_normal_chunk.unsqueeze(0), rast, torch.arange(face_normal_chunk.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous(), ctx=self.glctx)[0]
                         img = (img + 1) / 2
                     elif type == "coord":
-                        img = interpolate(vertices, rast, faces_chunk)[0]
+                        img = interpolate(vertices, rast, faces_chunk, ctx=self.glctx)[0]
                     elif type == "attr":
                         if isinstance(mesh, MeshWithVoxel):
                             if 'grid_sample_3d' not in globals():
                                 from flex_gemm.ops.grid_sample import grid_sample_3d
                             mask = rast[..., -1:] > 0
-                            xyz = interpolate(vertices, rast, faces_chunk)[0]
+                            xyz = interpolate(vertices, rast, faces_chunk, ctx=self.glctx)[0]
                             xyz = ((xyz - mesh.origin) / mesh.voxel_size).reshape(1, -1, 3)
                             img = grid_sample_3d(
                                 mesh.attrs,
@@ -305,6 +306,7 @@ class MeshRenderer:
                                 rast,
                                 torch.arange(mesh.uv_coords.shape[0] * 3, dtype=torch.int, device=self.device).reshape(-1, 3),
                                 rast_db=rast_db,
+                                ctx=self.glctx,
                             )
                             texc = torch.nan_to_num(texc, nan=0.0, posinf=1e3, neginf=-1e3)
                             texc = torch.clamp(texc, min=-1e3, max=1e3)
@@ -381,7 +383,7 @@ class MeshRenderer:
                     
                         img = torch.cat([imgs[name] for name in imgs.keys()], dim=-1).unsqueeze(0)
                     else:
-                        img = interpolate(mesh.vertex_attrs.unsqueeze(0), rast, faces_chunk)[0]
+                        img = interpolate(mesh.vertex_attrs.unsqueeze(0), rast, faces_chunk, ctx=self.glctx)[0]
                             
                     if type not in out_dict:
                         out_dict[type] = img

@@ -119,9 +119,13 @@ class DRTKContext:
     """Compatibility context mimicking nvdiffrast's RasterizeCudaContext.
     
     DRTK is stateless, but this provides a compatible interface.
+    Caches rasterization outputs for use in interpolate().
     """
     def __init__(self, device: str = 'cuda'):
         self.device = device
+        self._cache_index_img = None
+        self._cache_bary = None
+        self._cache_resolution = None
     
     def rasterize(
         self,
@@ -145,212 +149,35 @@ class DRTKContext:
         """
         import drtk
         
-        # Clip space to NDC (perspective division)
-        vertices_ndc = vertices_clip[..., :3] / vertices_clip[..., 3:4].clamp(min=1e-8)
-        
-        # NDC [-1, 1] to pixel space
         h, w = resolution
-        vertices_pix = vertices_ndc.clone()
-        # NDC x: [-1, 1] -> pixel [0, W-1], with pixel center at (W-1)/2 for NDC 0
-        # DRTK expects: pixel centers at integer coordinates, top-left at (0,0) center at (-0.5,-0.5)
-        # nvdiffrast NDC: center at (0,0), so we need to convert
-        # x_ndc=0 -> (W-1)/2 in pixel space for nvdiffrast with align_corners=True
-        # DRTK: x_pix = (x_ndc + 1) * (W - 1) / 2  for align_corners=False style
-        
-        # Actually, let's check DRTK's coordinate system more carefully
-        # From docs: "coordinates of the top left corner are (-0.5, -0.5), and bottom right (width - 0.5, height - 0.5)"
-        # So the center of pixel (i, j) is at (i - 0.5, j - 0.5) for DRTK
-        # We need to convert from clip space to DRTK pixel space
-        
-        # Clip space: after perspective division, NDC is [-1, 1] (OpenGL convention)
-        # nvdiffrast expects vertices in clip space and does its own conversion
-        # The output rast[...,:2] contains barycentric coords, rast[...,2] is depth, rast[...,3] is triangle ID
-        
-        # For DRTK, vertices need to be in pixel space with z in camera space
-        # vertices_clip[..., :3] is clip space (x, y, z), and we need camera-space depth
-        
-        # The vertices_clip format is: [1, V, 4] with (x_clip, y_clip, z_clip, w_clip)
-        # After perspective divide: (x_ndc, y_ndc, z_ndc) = (x/w, y/w, z/w)
-        # Depth in NDC is z_ndc
-        
-        # DRTK's transform() expects camera-space vertices and outputs pixel-space vertices
-        # Since we're given clip-space vertices, we need to extract camera-space info
-        
-        # Actually, the original code passes vertices_clip directly to nvdiffrast
-        # vertices_clip comes from: vertices_camera @ (perspective @ extrinsics).T
-        # which means: x_clip = perspective @ vertices_camera
-        
-        # We need to compute pixel coordinates differently
-        # Let's derive from first principles:
-        
-        # For nvdiffrast: rast = dr.rasterize(ctx, vertices_clip, faces, (H, W))
-        # vertices_clip is in homogeneous clip space [-1, 1] after projection
-        
-        # DRTK needs: v_pix shape [N, V, 3] where:
-        #   - v[..., 0:2] are pixel coordinates (x, y) with top-left = (0, 0) center at (0.5, 0.5)? No...
-        #   - From DRTK docs: "coordinates of the top left corner are (-0.5, -0.5), 
-        #                       and the coordinates of the bottom right corner are (width - 0.5, height - 0.5)"
-        #   - So pixel (i, j) has center at (i, j) for DRTK coordinates
-        
-        # NDC to DRTK pixel: x_pix = (x_ndc + 1) * width / 2
-        # But that gives range [0, width], not [-0.5, width-0.5]
-        # So: x_pix = (x_ndc + 1) * width / 2 - 0.5
-        # No wait, the nvdiffrast convention is that pixel centers are at (i+0.5, j+0.5) where i,j are integer indices
-        # And DRTK pixel centers are at (i, j)
-        # So DRTK's "pixel coordinates" are shifted by 0.5 from nvdiffrast
-        
-        # Let me reread: DRTK says "coordinates of the top left corner are (-0.5, -0.5)"
-        # This means for a pixel at DRTK coordinate (x, y), the actual position is around that
-        # nvdiffrast clip space [-1, 1] maps to pixels [0, W-1] with center at W/2 at NDC 0
-        
-        # For consistency with rasterization conventions:
-        # nvdiffrast: after perspective divide, the viewport transform maps NDC to pixels
-        # Standard OpenGL: glViewport maps NDC [-1,1] to [0, W] and [0, H]
-        #   Actually to [0, W-1] for pixel indices
-        
-        # I'll use the standard mapping:
-        # x_pix = (x_ndc + 1) * (W - 1) / 2
-        # This maps NDC [-1, 1] to pixel [0, W-1]
-        # But DRTK expects top-left at (0, 0) for pixel indexing...
-        
-        # Actually re-reading DRTK: "The coordinates of the top left corner are (-0.5, -0.5)"
-        # This is a bit unusual. Let's interpret:
-        # If top-left corner is at (-0.5, -0.5), that means pixel (0, 0) covers the range [0, 1) x [0, 1) at center (0.5, 0.5)
-        # Wait no, it says *corner* not *center*. 
-        # So the corner of pixel (0,0) is at DRTK coordinate (-0.5, -0.5)?
-        # That would mean the center of pixel (0,0) is at (0, 0) in DRTK coordinates.
-        
-        # OK let me check the DRTK tutorial more carefully...
-        # From the tutorial: vertices have coordinates like (511, 511) for a 512x512 image, 
-        # suggesting pixel (511, 511) is valid and maps to bottom-right area.
-        
-        # For the conversion, let's use:
-        # NDC x in [-1, 1] -> DRTK pixel x in [0, W-1] (approximately)
-        # x_drtk = (x_ndc + 1) * (W - 1) / 2
-        # But for precise matching, we need (x_ndc + 1) / 2 * W for width W
-        # Actually standard NDC-to-pixel: pixel_center_x = (NDC_x + 1) * W / 2
-        # And for DRTK, coordinate system has center of pixel (i, j) at float (i, j)
-        # So: x_drtk = (x_ndc + 1) * W / 2
-        
-        # Let's use this simpler formula which should work:
-        x_ndc = vertices_clip[..., 0] / vertices_clip[..., 3].clamp(min=1e-8)
-        y_ndc = vertices_clip[..., 1] / vertices_clip[..., 3].clamp(min=1e-8)
-        z_cam = vertices_clip[..., 2] / vertices_clip[..., 3].clamp(min=1e-8)  # NDC z, not camera z directly
-        
-        # NDC to pixel (DRTK convention): center at W/2 maps to NDC 0
-        # x_pix = (x_ndc + 1) * W / 2 - 0.5 = x_ndc * W/2 + W/2 - 0.5
-        # For center at W/2: x_ndc=0 -> x_pix = W/2 - 0.5, which is center of pixel at W/2 - 0.5?
-        # Hmm, let me think differently.
-        
-        # DRTK: v_pix expects pixel coordinates where the rasterizer will use
-        # For a viewport transformation from NDC [-1, 1] to pixels:
-        # Standard: x_pix = W/2 * x_ndc + W/2
-        # This puts NDC -1 at pixel 0, NDC 0 at pixel W/2, NDC 1 at pixel W
-        # But DRTK's output coordinates are such that pixel (0, 0) corresponds to the top-left
-        # with coordinate (0, 0) at center of that pixel? Let me check again.
-        
-        # From DRTK tutorial "Hello Triangle":
-        # v = th.as_tensor([[[0, 511, 1], [255, 0, 1], [511, 511, 1]]]).float().cuda()
-        # This creates a triangle with vertices at pixel-space corners (0, 511), (255, 0), (511, 511)
-        # for a 512x512 image. The rasterize call uses height=512, width=512.
-        # So coordinates go from 0 to 511 for a 512-pixel image, meaning pixel centers are at integer coords.
-        
-        # For our case, we get clip-space vertices. The perspective divide gives NDC.
-        # Then NDC [-1, 1] maps to pixel space:
-        # If we want NDC (-1, -1) to go to pixel (0, 511) [top-left], and NDC (1, 1) to pixel (511, 0) [bottom-right]
-        # But note: OpenGL NDC has y pointing up, image y pointing down
-        # So: x_pix = (x_ndc + 1) / 2 * (W - 1)
-        #     y_pix = (1 - y_ndc) / 2 * (H - 1)  # flip y since NDC y-up, image y-down
-        
-        # Actually simpler: follow nvdiffrast convention which uses clip space directly
-        # Let's convert: divide by w, then scale to resolution
-        # nvdiffrast convention: clip space vertices, perspective divide, viewport transform handled internally
-        
-        # After perspective divide:
+
         x_ndc = vertices_clip[..., 0] / vertices_clip[..., 3].clamp(min=1e-8, max=1e8)
-        y_ndc = -vertices_clip[..., 1] / vertices_clip[..., 3].clamp(min=1e-8, max=1e8)  # Flip y for image coords
-        z_ndc = vertices_clip[..., 2] / vertices_clip[..., 3].clamp(min=1e-8, max=1e8)
+        y_ndc = -vertices_clip[..., 1] / vertices_clip[..., 3].clamp(min=1e-8, max=1e8)
         
-        # Convert NDC to DRTK pixel coordinates
-        # NDC [-1, 1] -> pixel [0, W-1], [0, H-1] but DRTK uses center convention
         x_pix = (x_ndc + 1) * 0.5 * w
         y_pix = (y_ndc + 1) * 0.5 * h
+        z_cam = vertices_clip[..., 3].clone()
         
-        # z in pixel coords: DRTK expects camera-space z for depth ordering
-        # We have z_ndc which depends on projection. For OpenGL projection, z_ndc correlates with camera z
-        # but isn't exactly it. We need to extract camera-space z from the clip representation.
-        
-        # The vertices_clip comes from full projection: perspective @ extrinsics @ vertices_world
-        # Which means: clip = P * V * v_world, where V = extrinsics, P = perspective matrix
-        # Camera-space z = V @ v_world = (P^-1 @ clip)[:3], specifically the z component / w_clip
-        # But since we only have clip-space output, we can approximate:
-        # z_cam could be extracted if we had the projection matrix inverse
-        
-        # For now, let's use the fact that the perspective matrix is known (it's constructed in intrinsics_to_projection)
-        # The perspective matrix P is:
-        # [[2fx, 0, 2cx-1, 0],
-        #  [0, 2fy, -2cy+1, 0],
-        #  [0, 0, (f+n)/(f-n), 2fn/(f-n)],
-        #  [0, 0, 1, 0]]
-        # After applying to (xc, yc, zc, 1) in camera space:
-        # clip = (2fx*xc + 0 + (2cx-1), 2fy*yc + (-2cy+1), zc*(f+n)/(f-n) + 2fn/(f-n), zc)
-        # So w_clip = zc (camera-space z)
-        # Therefore: z_cam = vertices_clip[..., 3] (homogeneous w)
-        
-        # Wait, that doesn't account for scale/offset. Let me recalculate.
-        # Actually the formula inintrinsics_to_projection is for the OpenGL-style projection matrix.
-        # clip.z = zc * (f+n)/(f-n) + 2fn/(f-n)
-        # clip.w = zc
-        # z_ndc = clip.z / clip.w = (f+n)/(f-n) + 2fn/(f-n)/zc
-        # This is non-linear in zc.
-        
-        # For camera-space depth, we need zc = clip.w
-        
-        z_cam = vertices_clip[..., 3].clone()  # This IS camera-space z
-        
-        # Stack to DRTK format: [N, V, 3] with (x_pix, y_pix, z_cam)
         v_pix = torch.stack([x_pix, y_pix, z_cam], dim=-1)
         
-        # Ensure faces is int32 for DRTK
-        faces_int = faces.int() if faces.dtype != torch.int32 else faces
+        faces_int = faces.to(torch.int32) if faces.dtype != torch.int32 else faces
         
-        # Call DRTK rasterize
         index_img = drtk.rasterize(v_pix, faces_int, height=h, width=w)
-        
-        # Get depth and barycentric coordinates
         depth, bary = drtk.render(v_pix, faces_int, index_img)
         
-        # Convert to nvdiffrast format: rast[..., 0:2] = bary, rast[..., 2] = depth_normalized, rast[..., 3] = triangle_id
-        # nvdiffrast bary: (u, v) for triangle abc, with w = 1 - u - v
+        # Cache for use in interpolate()
+        self._cache_index_img = index_img
+        self._cache_bary = bary
+        self._cache_resolution = (h, w)
         
-        # DRTK's bary is [N, 3, H, W] with (w0, w1, w2) weights
-        # nvdiffrast's rast[..., 0:2] contains (v, u) in some order - let's just use DRTK's weights
-        
-        # Create rast tensor in nvdiffrast format
         batch_size = v_pix.shape[0]
         rast = torch.zeros(batch_size, h, w, 4, device=v_pix.device, dtype=torch.float32)
         
-        # Barycentric coordinates (store as u, v)
-        rast[..., 0] = bary[:, 1]  # u
-        rast[..., 1] = bary[:, 2]  # v
+        rast[..., 0] = bary[:, 1]
+        rast[..., 1] = bary[:, 2]
+        rast[..., 2] = depth[:, 0]
+        rast[..., 3] = (index_img.float() + 1).float()
         
-        # Depth: convert from camera z to nvdiffrast's depth format
-        # nvdiffrast returns z/w from clip space, which is z_ndc
-        # We can reconstruct z_ndc from z_cam via the projection
-        # Actually for simplicity, let's store camera-space depth normalized
-        # DRTK returns camera-space depth, nvdiffrast returns clip-space z/w        
-        # For compatibility with existing code, let's store the depth in a way that works
-        # The code uses rast[..., 2] as depth for z-buffering and dr.interpolate
-        # We'll use DRTK's depth directly
-        rast[..., 2] = depth[:, 0]  # DRTK depth is [N, 1, H, W]
-        
-        # Triangle ID: convert from DRTK (-1 for background) to nvdiffrast (0 for background, 1-indexed)
-        rast[..., 3] = (index_img.float() + 1).float()  # -1 -> 0, 0 -> 1, etc.
-        
-        # Placeholder for derivatives (rast_db)
-        # nvdiffrast uses this for texture mipmap level selection
-        # DRTK uses a different approach with mipmap_grid_sample
-        # For now, we'll compute a simple approximation
         rast_db = torch.zeros_like(rast)
         
         return rast, rast_db
@@ -361,6 +188,8 @@ def interpolate(
     rast: torch.Tensor,
     faces: torch.Tensor,
     rast_db: Optional[torch.Tensor] = None,
+    ctx: Optional['DRTKContext'] = None,
+    peeler: Optional['DepthPeeler'] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """Interpolate vertex attributes using DRTK.
     
@@ -369,6 +198,8 @@ def interpolate(
         rast: Rasterization output from DRTKContext.rasterize()
         faces: Face indices [F, 3]
         rast_db: Unused, for compatibility with nvdiffrast API
+        ctx: DRTKContext instance (uses cached rasterization outputs if provided)
+        peeler: DepthPeeler instance (uses cached rasterization outputs if provided)
         
     Returns:
         interpolated: [1, H, W, C] interpolated attributes
@@ -376,39 +207,31 @@ def interpolate(
     """
     import drtk
     
-    # Ensure attr has batch dimension
     if attr.dim() == 2:
         attr = attr.unsqueeze(0)
     
-    # Extract DRTK-format outputs from rast
-    # rast[..., 3] contains triangle_id (we stored index_img + 1)
     h, w = rast.shape[1], rast.shape[2]
-    index_img = (rast[0, ..., 3] - 1).long()  # Convert back to DRTK format
     
-    # We need barycentric coordinates
-    # Re-rasterize to get them (this is inefficient, but matches the interface)
-    # Actually, we stored (u, v) in rast[..., 0:2], so we can reconstruct w = 1 - u - v
-    # But DRTK interpolate needs the actual bary tensor from drtk.render
+    # Use cached outputs from DepthPeeler if available (highest priority)
+    if peeler is not None and peeler._cache_index_img is not None:
+        index_img = peeler._cache_index_img
+        bary_img = peeler._cache_bary
+    # Use cached outputs from a DRTKContext if available
+    elif ctx is not None and ctx._cache_index_img is not None and ctx._cache_resolution == (h, w):
+        index_img = ctx._cache_index_img
+        bary_img = ctx._cache_bary
+    else:
+        # Fall back to reconstructing from rast (less accurate but works for compatibility)
+        index_img = (rast[0, ..., 3] - 1).to(torch.int32)
+        u = rast[..., 0]
+        v = rast[..., 1]
+        w0 = 1.0 - u - v
+        bary_img = torch.stack([w0, u, v], dim=1)
     
-    # For a proper implementation, we should cache the bary from rasterize()
-    # But to maintain nvdiffrast-like API, let's store it in rast_db or pass separately
+    faces_int = faces.to(torch.int32) if faces.dtype != torch.int32 else faces
     
-    # Let's use a different approach: compute bary from stored values
-    # The rast contains u, v in [..., 0:2], so w0 = 1 - u - v, w1 = u, w2 = v
-    u = rast[..., 0]  # [N, H, W]
-    v = rast[..., 1]  # [N, H, W]
-    w0 = 1.0 - u - v
-    
-    # DRTK expects bary as [N, 3, H, W]
-    bary_img = torch.stack([w0, u, v], dim=1)  # [N, 3, H, W]
-    
-    # Ensure faces is int32
-    faces_int = faces.int() if faces.dtype != torch.int32 else faces
-    
-    # DRTK interpolate
     result = drtk.interpolate(attr, faces_int, index_img, bary_img)
     
-    # DRTK returns [N, C, H, W], convert to nvdiffrast format [N, H, W, C]
     result = result.permute(0, 2, 3, 1)
     
     return result, None
@@ -534,9 +357,8 @@ class DepthPeeler:
         self.layers_drawn = 0
         self.max_layers = 100  # Safety limit
         self.depth_buffer = None  # Accumulated depth layers
-        
-        # Rasterize once to get initial depth
-        self._rasterize()
+        self._cache_index_img = None
+        self._cache_bary = None
     
     def _rasterize(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Perform rasterization."""
@@ -555,11 +377,9 @@ class DepthPeeler:
         if self.layers_drawn >= self.max_layers:
             return torch.zeros(1, self.resolution[0], self.resolution[1], 4, device=self.vertices_clip.device), None
         
-        # Get raw DRTK outputs
         batch_size = self.vertices_clip.shape[0]
         h, w = self.resolution
         
-        # Convert clip to pixel coordinates
         x_ndc = self.vertices_clip[..., 0] / self.vertices_clip[..., 3].clamp(min=1e-8)
         y_ndc = -self.vertices_clip[..., 1] / self.vertices_clip[..., 3].clamp(min=1e-8)
         z_cam = self.vertices_clip[..., 3]
@@ -568,28 +388,20 @@ class DepthPeeler:
         y_pix = (y_ndc + 1) * 0.5 * h
         
         v_pix = torch.stack([x_pix, y_pix, z_cam], dim=-1)
-        faces_int = self.faces.int() if self.faces.dtype != torch.int32 else self.faces
+        faces_int = self.faces.to(torch.int32) if self.faces.dtype != torch.int32 else self.faces
         
-        # Rasterize
         index_img = drtk.rasterize(v_pix, faces_int, height=h, width=w)
         depth, bary = drtk.render(v_pix, faces_int, index_img)
         
-        # Depth peeling: mask out triangles at or behind current depth buffer
+        # Cache for interpolate
+        self._cache_index_img = index_img
+        self._cache_bary = bary
+        
         if self.depth_buffer is not None:
-            # For pixels that have existing geometry, we need to find the next closest
-            # This is a simplified approach - full depth peeling requires multiple passes
-            
-            # Create mask for pixels with geometry
             has_geom = index_img >= 0
-            
-            # Current depth
-            current_depth = depth[0, 0]  # [H, W]
-            
-            # If this is not the first layer, we should exclude already drawn pixels
-            # For proper implementation, we'd need to render from back to front or use multiple passes
+            current_depth = depth[0, 0]
             pass
         
-        # Convert to nvdiffrast format
         rast = torch.zeros(batch_size, h, w, 4, device=self.vertices_clip.device, dtype=torch.float32)
         rast[..., 0] = bary[:, 1]
         rast[..., 1] = bary[:, 2]
@@ -598,7 +410,6 @@ class DepthPeeler:
         
         rast_db = torch.zeros_like(rast)
         
-        # Update depth buffer for next layer
         self.depth_buffer = depth.clone()
         self.layers_drawn += 1
         
