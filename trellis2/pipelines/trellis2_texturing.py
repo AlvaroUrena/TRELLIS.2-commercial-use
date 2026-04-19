@@ -83,7 +83,9 @@ class Trellis2TexturingPipeline(Pipeline):
         pipeline.tex_slat_normalization = args['tex_slat_normalization']
 
         pipeline.image_cond_model = getattr(image_feature_extractor, args['image_cond_model']['name'])(**args['image_cond_model']['args'])
-        pipeline.rembg_model = getattr(rembg, args['rembg_model']['name'])(**args['rembg_model']['args'])
+        rembg_args = dict(args['rembg_model']['args'])
+        rembg_args['model_name'] = 'ZhengPeng7/BiRefNet'
+        pipeline.rembg_model = getattr(rembg, args['rembg_model']['name'])(**rembg_args)
 
         pipeline.low_vram = args.get('low_vram', True)
         pipeline.pbr_attr_layout = {
