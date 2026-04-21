@@ -2,7 +2,7 @@
 PLANNING: DRTK FORK FIX & VERIFICATION
 ================================================================================
 
-This document guides an AI agent through fixing issues in the TRELLIS.2 
+This document guides an AI agent through fixing issues in the TRELLIS.2
 DRTK fork by comparing with the official nvdiffrast implementation.
 
 PROJECTS:
@@ -32,9 +32,7 @@ Fork (DRTK):
   cd ~/Documents/AI/TRELLIS.2-commercial-use
   TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_mesh.py 2>&1 | tee test_output/debug_fork.log
 
-Official (nvdiffrast) - ONLY FOR REFERENCE, DON'T MODIFY:
-  cd ~/Documents/AI/TRELLIS.2
-  TRELLIS_DEBUG=1 conda run -n trellis2-official python test_render_mesh.py 2>&1 | tee test_output/debug_official.log
+Official (nvdiffrast) must not be executed because its not necessary (it will not change and its already stored in test_output_official)
 
 ## Compare Outputs
 
@@ -61,7 +59,7 @@ After fixing an issue:
   5. If tests fail, investigate and fix, or if stuck:
      git reset --hard HEAD~1  # Undo last commit, try another approach
 
-IMPORTANT: 
+IMPORTANT:
   - NEVER push to remote (only local commits)
   - Each issue fix = one commit
   - Commit messages should be descriptive
@@ -73,7 +71,7 @@ PHASE 1: PIPELINE DETERMINISM FIX
 STATUS: PENDING
 
 ISSUE:
-  Both projects use seed=42, but the sparse structure sampling produces 
+  Both projects use seed=42, but the sparse structure sampling produces
   different results. The fork generates ~1,112 voxels vs ~3,540 voxels in
   official, leading to 3.8x smaller meshes.
 
@@ -132,7 +130,7 @@ VERIFICATION CHECKS:
    - In drtk_compat.py rasterize(), check the conversion from clip-space
      to pixel-space:
      - x_ndc = vertices_clip[..., 0] / w_clip
-     - y_ndc = -vertices_clip[..., 1] / w_clip  
+     - y_ndc = -vertices_clip[..., 1] / w_clip
      - x_pix = (x_ndc + 1) * 0.5 * W - 0.5
      - y_pix = (y_ndc + 1) * 0.5 * H - 0.5
    - Verify z_cam = vertices_clip[..., 3] (not z_ndc!)
@@ -146,7 +144,7 @@ VERIFICATION CHECKS:
    - We reconstruct rast[..., 3] = index_img[0] + 1 (1-indexed tri ID)
 
 POTENTIAL BUGS TO WATCH:
-  - Check if barycentric weight convention matches: DRTK's w0,w1,w2 
+  - Check if barycentric weight convention matches: DRTK's w0,w1,w2
     should map to nvdiffrast's 1-u-v, u, v
   - Depth value: nvdiffrast stores z/w in clip-space, DRTK stores z_cam
     - These are DIFFERENT! z_cam = w_clip (the w component), z/w = z_clip/w_clip
@@ -205,9 +203,9 @@ POTENTIAL BUGS:
     torch.arange(num_faces).unsqueeze(1).repeat(1, 3) for per-face attributes
 
 SUCCESS CRITERIA:
-  - Interpolated normals (R17_interpolated_normal_raw.npy) have reasonable 
+  - Interpolated normals (R17_interpolated_normal_raw.npy) have reasonable
     range [-1, 1] for visible pixels
-  - Interpolated depth (R16_interpolated_depth.npy) has values matching 
+  - Interpolated depth (R16_interpolated_depth.npy) has values matching
     z_camera (not z/w!)
 
 ================================================================================
@@ -218,7 +216,7 @@ STATUS: PENDING
 
 KEY CHECKPOINT:
   Depth values in nvdiffrast vs DRTK are DIFFERENT by convention:
-  
+
   nvdiffrast rast[..., 2] = z_clip / w_clip (normalized device depth)
   DRTK depth = z_camera (camera-space distance from camera)
 
@@ -341,12 +339,12 @@ When fixing DRTK-related issues, consult:
    - Check tutorial index for relevant topics
 
 3. **Important API Differences from nvdiffrast**:
-   
+
    nvdiffrast:
      dr.rasterize(glctx, vertices_clip, faces, (H, W)) -> (rast, rast_db)
      dr.interpolate(attr, rast, faces) -> (result, derivs)
      dr.texture(tex, uv, uv_da) -> (result, derivs)
-   
+
    DRTK:
      drtk.rasterize(v_pix, faces, height, width) -> index_img
      drtk.render(v_pix, faces, index_img) -> (depth, bary)
