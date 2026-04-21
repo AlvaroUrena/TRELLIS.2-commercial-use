@@ -167,52 +167,64 @@ NOTE: This is acceptable for inference. Consider implementing MSAA
       or post-process AA if edge quality is critical for use case.
 
 ================================================================================
-ISSUE 6: PBR MATERIAL VALUES DIFFER SIGNIFICANTLY
+ISSUE 6: VOXEL ATTRIBUTES DIFFER BETWEEN FORK AND OFFICIAL
 ================================================================================
 
-STATUS: [IN_PROGRESS] - Investigating
+STATUS: [IN_PROGRESS] - Texture pipeline investigation needed
 
-SEVERITY: HIGH - Affects visual quality significantly
+SEVERITY: MEDIUM - Affects PBR material values
 
 DESCRIPTION:
-   The material values (base_color, metallic, roughness, alpha) from 
-   grid_sample_3d differ significantly between fork and official:
+   The voxel attributes (mesh.attrs) from the texture decoder differ between
+   fork and official even though:
+   - Mesh vertices and faces are IDENTICAL
+   - Same random seed (42)
+   - Sparse structure coords are IDENTICAL
    
-   | Attribute   | Fork Mean | Official Mean | Ratio    |
-   |-------------|-----------|---------------|----------|
-   | Metallic    | 1.09      | 60.77         | 1.8%     |
-   | Alpha       | 1.77      | 45.36         | 3.9%     |
-   | Roughness   | 1.31      | 13.54         | 9.7%     |
-   | Base Color  | 0.31      | 8.53          | 3.6%     |
-   | Shaded      | 0.39      | 8.15          | 4.8%     |
+   Comparison (base_color, metallic, roughness, alpha channels):
    
-   Mask coverage is identical (65.43 vs 65.44), so geometry matches.
-   Normal values differ but coverage is correct (mean 153.41 vs 135.42).
+   | Channel      | Fork Mean | Official Mean |
+   |--------------|-----------|---------------|
+   | base_color   | 0.2047    | 0.0988        |
+   | metallic     | 0.7126    | 0.8960        |
+   
+   Both projects produce consistent attrs within themselves across runs.
 
-POSSIBLE CAUSES:
-   1. grid_sample_3d (flex_gemm) returns different values than expected
-   2. Coordinates passed to grid_sample_3d are computed differently
-   3. Voxel attribute (mesh.attrs) values differ during decoding
-   4. mesh.voxel_shape, mesh.origin, or mesh.voxel_size differ
-   
 INVESTIGATION NEEDED:
-   - Compare mesh.attrs values between fork and official
-   - Compare xyz coordinates passed to grid_sample_3d
-   - Verify grid_sample_3d input/output with debug prints
-   - Check if DRTK rasterizer produces different interpolated positions
+   - Compare texture decoder outputs
+   - Check texture SLat sampling (different from shape SLat)
+   - Verify texture flow model sampling
 
 LOCATION:
-   - trellis2/renderers/pbr_mesh_renderer.py lines ~343-360 (grid_sample_3d call)
-   - flex_gemm.ops.grid_sample (external package)
-
-DEBUG APPROACH:
-   1. Add debug output for mesh.attrs shape and value ranges
-   2. Add debug output for xyz coordinates before grid_sample_3d
-   3. Compare grid_sample_3d output values
-   4. Verify voxel_shape matches between fork and official
+   - trellis2/pipelines/ - Pipeline texture sampling
+   - trellis2/modules/ - Texture decoder and flow models
 
 ================================================================================
-ISSUE 7: NVDIFFREC DEPENDENCY REMOVAL
+ISSUE 7: BACKGROUND PIXEL INTERPOLATION FIXED
+================================================================================
+
+STATUS: [FIXED]
+
+SEVERITY: HIGH - Bug in DRTK compatibility layer
+
+DESCRIPTION:
+   DRTK's interpolate() returns garbage values for background pixels (where
+   index_img == -1), while nvdiffrast's interpolate() returns zeros.
+
+PROBLEM:
+   - Background xyz values were -255 to 767 (out of valid range 0-511)
+   - grid_sample_3d sampled at invalid coordinates
+   - Material values were wrong even for valid pixels
+
+FIX:
+   Zero out interpolated result where index_img < 0 in drtk_compat.py
+
+VERIFICATION:
+   - xyz values now correct: min=-0.5, max=0.5 for geometry pixels
+   - Background pixels now zero (matching nvdiffrast behavior)
+
+================================================================================
+ISSUE 8: NVDIFFREC DEPENDENCY REMOVAL
 ================================================================================
 
 STATUS: [FIXED]
@@ -246,7 +258,8 @@ Format: DATE - ISSUE_NUMBER - STATUS_CHANGE
 2026-04-21 - Issue 4 - DISCOVERED: Barycentric mapping needs verification
 2026-04-21 - Issue 5 - DISCOVERED: Antialias is no-op (acceptable)
 2026-04-21 - Issue 6 - DISCOVERED: PBR material values differ significantly
-2026-04-21 - Issue 7 - FIXED: nvdiffrec dependency removal
+2026-04-21 - Issue 7 - DISCOVERED: Background pixels have garbage values in DRTK interpolate
+2026-04-21 - Issue 8 - FIXED: nvdiffrec dependency removal
 
 ================================================================================
 FIXED ISSUES LOG
@@ -263,7 +276,11 @@ Format: DATE - ISSUE_NUMBER - STATUS_CHANGE
 
 2026-04-21 - Issue 4 - VERIFIED: Barycentric coordinate mapping is correct
 
-2026-04-21 - Issue 7 - FIXED: nvdiffrec dependency removed and replaced with
+2026-04-21 - Issue 7 - FIXED: Background pixel interpolation now zeros out
+  background pixels where index_img < 0, matching nvdiffrast behavior.
+  This fixed xyz coordinate calculation for grid_sample_3d.
+
+2026-04-21 - Issue 8 - FIXED: nvdiffrec dependency removed and replaced with
   pure PyTorch PBR implementation
 
 ================================================================================
