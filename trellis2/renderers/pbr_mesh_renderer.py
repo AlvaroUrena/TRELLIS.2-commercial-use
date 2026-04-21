@@ -33,14 +33,16 @@ def latlong_to_cubemap(latlong_map, res):
 
         # Use F.grid_sample instead of nvdiffrast's dr.texture
         # texcoord is in [0, 1], grid_sample expects [-1, 1]
-        grid = texcoord.unsqueeze(0) * 2 - 1
+        # grid_sample expects input [N, C, H, W] and grid [N, H_out, W_out, 2]
+        grid = texcoord.unsqueeze(0) * 2 - 1  # [1, H, W, 2]
+        latlong_chw = latlong_map.unsqueeze(0).permute(0, 3, 1, 2)  # [1, C, H_in, W_in]
         cubemap[s, ...] = F.grid_sample(
-            latlong_map.unsqueeze(0), 
-            grid.unsqueeze(0),
+            latlong_chw, 
+            grid,
             mode='bilinear',
             padding_mode='border',
             align_corners=True
-        )[0]
+        )[0].permute(1, 2, 0)  # [C, H, W] -> [H, W, C]
     return cubemap
 
 
@@ -50,12 +52,12 @@ class EnvMap:
         
     @property
     def _backend(self):
-        if not hasattr(self, '_nvdiffrec_envlight'):
-            from nvdiffrec_render.light import EnvironmentLight
+        if not hasattr(self, '_pbr_envlight'):
+            from .pbr_envmap import PBREnvironmentLight
             cubemap = latlong_to_cubemap(self.image, [512, 512])
-            self._nvdiffrec_envlight = EnvironmentLight(cubemap)
-            self._nvdiffrec_envlight.build_mips()
-        return self._nvdiffrec_envlight
+            self._pbr_envlight = PBREnvironmentLight(cubemap)
+            self._pbr_envlight.build_mips()
+        return self._pbr_envlight
 
     def shade(self, gb_pos, gb_normal, kd, ks, view_pos, specular=True):
         return self._backend.shade(gb_pos, gb_normal, kd, ks, view_pos, specular)

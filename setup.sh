@@ -8,7 +8,7 @@
 #   export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 
 # Read Arguments
-TEMP=`getopt -o h --long help,new-env,basic,flash-attn,cumesh,o-voxel,flexgemm,drtk,nvdiffrec -n 'setup.sh' -- "$@"`
+TEMP=`getopt -o h --long help,new-env,basic,flash-attn,cumesh,o-voxel,flexgemm,drtk -n 'setup.sh' -- "$@"`
 
 eval set -- "$TEMP"
 
@@ -20,7 +20,6 @@ CUMESH=false
 OVOXEL=false
 FLEXGEMM=false
 DRTK=false
-NVDIFFREC=false
 ERROR=false
 
 
@@ -38,7 +37,7 @@ while true ; do
         --o-voxel) OVOXEL=true ; shift ;;
         --flexgemm) FLEXGEMM=true ; shift ;;
         --drtk) DRTK=true ; shift ;;
-        --nvdiffrec) NVDIFFREC=true ; shift ;;
+
         --) shift ; break ;;
         *) ERROR=true ; break ;;
     esac
@@ -60,7 +59,7 @@ if [ "$HELP" = true ] ; then
     echo "  --o-voxel               Install o-voxel"
     echo "  --flexgemm              Install flexgemm"
     echo "  --drtk                  Install DRTK (differentiable renderer, MIT license)"
-    echo "  --nvdiffrec             Install nvdiffrec"
+
     return 0
 fi
 
@@ -188,17 +187,6 @@ if [ "$DRTK" = true ] ; then
     
     echo "[DRTK] Restoring setuptools to $ORIG_SETUPTOOLS..."
     pip install setuptools=="$ORIG_SETUPTOOLS"
-fi
-
-if [ "$NVDIFFREC" = true ] ; then
-    if [ "$PLATFORM" = "cuda" ] ; then
-        echo "[NVDIFFREC] Installing nvdiffrec..."
-        mkdir -p /tmp/extensions
-        git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec
-        pip install /tmp/extensions/nvdiffrec --no-build-isolation
-    else
-        echo "[NVDIFFREC] Unsupported platform: $PLATFORM"
-    fi
 fi
 
 if [ "$CUMESH" = true ] ; then

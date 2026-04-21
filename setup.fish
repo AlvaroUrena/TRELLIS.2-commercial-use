@@ -15,7 +15,6 @@ set -l CUMESH false
 set -l OVOXEL false
 set -l FLEXGEMM false
 set -l DRTK false
-set -l NVDIFFREC false
 
 # Parse arguments
 for arg in $argv
@@ -36,8 +35,6 @@ for arg in $argv
             set FLEXGEMM true
         case '--drtk'
             set DRTK true
-        case '--nvdiffrec'
-            set NVDIFFREC true
         case '*'
             echo "Error: Invalid argument '$arg'"
             set HELP true
@@ -59,7 +56,6 @@ if test "$HELP" = "true"
     echo "  --o-voxel               Install o-voxel"
     echo "  --flexgemm              Install flexgemm"
     echo "  --drtk                  Install DRTK (differentiable renderer, MIT license)"
-    echo "  --nvdiffrec             Install nvdiffrec"
     return 0
 end
 
@@ -188,18 +184,6 @@ if test "$DRTK" = "true"
     
     echo "[DRTK] Restoring setuptools to $ORIG_SETUPTOOLS..."
     pip install setuptools==$ORIG_SETUPTOOLS
-end
-
-# Install nvdiffrec
-if test "$NVDIFFREC" = "true"
-    if test "$PLATFORM" = "cuda"
-        echo "[NVDIFFREC] Installing nvdiffrec..."
-        mkdir -p /tmp/extensions
-        git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec
-        pip install /tmp/extensions/nvdiffrec --no-build-isolation
-    else
-        echo "[NVDIFFREC] Unsupported platform: $PLATFORM"
-    end
 end
 
 # Install CuMesh

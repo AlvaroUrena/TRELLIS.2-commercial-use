@@ -186,6 +186,10 @@ class DRTKContext:
             dbg_tensor(step, "DRTK_raw_depth", depth)
             dbg_tensor(step, "DRTK_raw_bary", bary)
         
+        # Ensure index_img has batch dimension [N, H, W]
+        if index_img.dim() == 2:
+            index_img = index_img.unsqueeze(0)
+        
         # Cache for use in interpolate()
         self._cache_index_img = index_img
         self._cache_bary = bary
@@ -259,16 +263,17 @@ def interpolate(
         bary_img = ctx._cache_bary
     else:
         # Fall back to reconstructing from rast (less accurate but works for compatibility)
-        index_img = (rast[0, ..., 3] - 1).to(torch.int32)
+        index_img = (rast[..., 3] - 1).to(torch.int32)
         u = rast[..., 0]
         v = rast[..., 1]
         w0 = 1.0 - u - v
-        bary_img = torch.stack([w0, u, v], dim=1)
-        # Ensure batch dimension for compatibility with drtk.interpolate
-        if index_img.dim() == 2:
-            index_img = index_img.unsqueeze(0)
-        if bary_img.dim() == 3:
-            bary_img = bary_img.unsqueeze(0)
+        bary_img = torch.stack([w0, u, v], dim=1 if rast.dim() == 4 else 0)
+    
+    # Ensure batch dimensions
+    if index_img.dim() == 2:
+        index_img = index_img.unsqueeze(0)
+    if bary_img.dim() == 3:
+        bary_img = bary_img.unsqueeze(0)
     
     if is_debug_enabled():
         step = next_step()

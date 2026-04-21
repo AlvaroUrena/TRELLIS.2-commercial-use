@@ -82,7 +82,7 @@ Data processing is streamlined for instant conversions that are fully **renderin
     
     Create a new conda environment named `trellis2` and install the dependencies:
     ```sh
-    . ./setup.sh --new-env --basic --flash-attn --drtk --nvdiffrec --cumesh --o-voxel --flexgemm
+    . ./setup.sh --new-env --basic --flash-attn --drtk --cumesh --o-voxel --flexgemm
     ```
     The detailed usage of `setup.sh` can be found by running `. ./setup.sh --help`.
     ```sh
@@ -96,7 +96,6 @@ Data processing is streamlined for instant conversions that are fully **renderin
         --o-voxel               Install o-voxel
         --flexgemm              Install flexgemm
         --drtk                  Install DRTK (differentiable renderer, MIT license)
-        --nvdiffrec             Install nvdiffrec
     ```
 
 ## 📦 Pretrained Weights
@@ -316,8 +315,6 @@ This model and code are released under the **[MIT License](LICENSE)**.
 Please note that certain dependencies operate under separate license terms:
 
 - [**DRTK**](https://github.com/facebookresearch/DRTK): Differentiable rendering toolkit used for rendering generated 3D assets. MIT licensed.
-
-- [**nvdiffrec**](https://github.com/NVlabs/nvdiffrec): Implements the split-sum renderer for PBR materials. This package is governed by its own [License](https://github.com/NVlabs/nvdiffrec/blob/main/LICENSE.txt).
 
 ## 📚 Citation
 

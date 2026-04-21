@@ -13,7 +13,7 @@
 
 Full setup (new conda env):
 ```sh
-. ./setup.sh --new-env --basic --flash-attn --drtk --nvdiffrec --cumesh --o-voxel --flexgemm
+. ./setup.sh --new-env --basic --flash-attn --drtk --cumesh --o-voxel --flexgemm
 ```
 
 Creates conda environment `trellis2` with PyTorch 2.6.0 + CUDA 12.4.
@@ -57,7 +57,6 @@ Dataset paths passed as JSON strings. See README for full training pipeline.
 
 ## Dependencies with Separate Licenses
 - `DRTK` — Differentiable rendering toolkit (MIT license)
-- `nvdiffrec` — PBR split-sum renderer (own license)
 
 ## No Tests
 No test suite or CI present in this repo.
