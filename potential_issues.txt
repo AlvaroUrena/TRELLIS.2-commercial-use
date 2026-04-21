@@ -170,12 +170,12 @@ NOTE: This is acceptable for inference. Consider implementing MSAA
 ISSUE 6: VOXEL ATTRIBUTES DIFFER BETWEEN FORK AND OFFICIAL
 ================================================================================
 
-STATUS: [IN_PROGRESS] - Texture pipeline investigation needed
+STATUS: [FIXED]
 
 SEVERITY: MEDIUM - Affects PBR material values
 
 DESCRIPTION:
-   The voxel attributes (mesh.attrs) from the texture decoder differ between
+   The voxel attributes (mesh.attrs) from the texture decoder differed between
    fork and official even though:
    - Mesh vertices and faces are IDENTICAL
    - Same random seed (42)
@@ -190,14 +190,26 @@ DESCRIPTION:
    
    Both projects produce consistent attrs within themselves across runs.
 
-INVESTIGATION NEEDED:
-   - Compare texture decoder outputs
-   - Check texture SLat sampling (different from shape SLat)
-   - Verify texture flow model sampling
+ROOT CAUSE:
+   The fork's sample_tex_slat() used tex_slat_normalization for denormalization
+   while the official incorrectly uses shape_slat_normalization. While this is a
+   copy-paste bug in official, the fork must match official's behavior to
+   produce consistent renders.
+
+FIX:
+   Changed sample_tex_slat() to use shape_slat_normalization instead of
+   tex_slat_normalization, matching official's (incorrect but consistent)
+   behavior.
 
 LOCATION:
-   - trellis2/pipelines/ - Pipeline texture sampling
-   - trellis2/modules/ - Texture decoder and flow models
+   - trellis2/pipelines/trellis2_image_to_3d.py sample_tex_slat()
+
+VERIFICATION:
+   - attrs mean values now match official exactly
+   - base_color mean: 0.0988 (matches official)
+   - metallic mean: 0.8960 (matches official)
+   - roughness mean: 0.2921 (matches official)
+   - alpha mean: 0.7248 (matches official)
 
 ================================================================================
 ISSUE 7: BACKGROUND PIXEL INTERPOLATION FIXED
