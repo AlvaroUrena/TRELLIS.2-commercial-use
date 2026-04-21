@@ -167,6 +167,74 @@ NOTE: This is acceptable for inference. Consider implementing MSAA
       or post-process AA if edge quality is critical for use case.
 
 ================================================================================
+ISSUE 6: PBR MATERIAL VALUES DIFFER SIGNIFICANTLY
+================================================================================
+
+STATUS: [IN_PROGRESS] - Investigating
+
+SEVERITY: HIGH - Affects visual quality significantly
+
+DESCRIPTION:
+   The material values (base_color, metallic, roughness, alpha) from 
+   grid_sample_3d differ significantly between fork and official:
+   
+   | Attribute   | Fork Mean | Official Mean | Ratio    |
+   |-------------|-----------|---------------|----------|
+   | Metallic    | 1.09      | 60.77         | 1.8%     |
+   | Alpha       | 1.77      | 45.36         | 3.9%     |
+   | Roughness   | 1.31      | 13.54         | 9.7%     |
+   | Base Color  | 0.31      | 8.53          | 3.6%     |
+   | Shaded      | 0.39      | 8.15          | 4.8%     |
+   
+   Mask coverage is identical (65.43 vs 65.44), so geometry matches.
+   Normal values differ but coverage is correct (mean 153.41 vs 135.42).
+
+POSSIBLE CAUSES:
+   1. grid_sample_3d (flex_gemm) returns different values than expected
+   2. Coordinates passed to grid_sample_3d are computed differently
+   3. Voxel attribute (mesh.attrs) values differ during decoding
+   4. mesh.voxel_shape, mesh.origin, or mesh.voxel_size differ
+   
+INVESTIGATION NEEDED:
+   - Compare mesh.attrs values between fork and official
+   - Compare xyz coordinates passed to grid_sample_3d
+   - Verify grid_sample_3d input/output with debug prints
+   - Check if DRTK rasterizer produces different interpolated positions
+
+LOCATION:
+   - trellis2/renderers/pbr_mesh_renderer.py lines ~343-360 (grid_sample_3d call)
+   - flex_gemm.ops.grid_sample (external package)
+
+DEBUG APPROACH:
+   1. Add debug output for mesh.attrs shape and value ranges
+   2. Add debug output for xyz coordinates before grid_sample_3d
+   3. Compare grid_sample_3d output values
+   4. Verify voxel_shape matches between fork and official
+
+================================================================================
+ISSUE 7: NVDIFFREC DEPENDENCY REMOVAL
+================================================================================
+
+STATUS: [FIXED]
+
+SEVERITY: INFO - Dependency removed
+
+DESCRIPTION:
+   Removed nvdiffrec dependency and replaced with pure PyTorch PBR implementation.
+
+CHANGES:
+   - Added trellis2/renderers/pbr_envmap.py with PBREnvironmentLight class
+   - Added trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin (precomputed BSDF LUT)
+   - Modified trellis2/renderers/pbr_mesh_renderer.py to use PBREnvironmentLight
+   - Removed nvdiffrec from setup.sh and setup.fish
+   - Removed nvdiffrec from README.md and AGENTS.md
+
+VERIFICATION:
+   - PBR rendering completes without errors
+   - Output images are generated successfully
+   - No nvdiffrast import errors
+
+================================================================================
 DISCOVERED ISSUES LOG
 ================================================================================
 
@@ -177,6 +245,8 @@ Format: DATE - ISSUE_NUMBER - STATUS_CHANGE
 2026-04-21 - Issue 3 - DISCOVERED: Rasterizer coverage mismatch (blocked)
 2026-04-21 - Issue 4 - DISCOVERED: Barycentric mapping needs verification
 2026-04-21 - Issue 5 - DISCOVERED: Antialias is no-op (acceptable)
+2026-04-21 - Issue 6 - DISCOVERED: PBR material values differ significantly
+2026-04-21 - Issue 7 - FIXED: nvdiffrec dependency removal
 
 ================================================================================
 FIXED ISSUES LOG
@@ -192,6 +262,9 @@ Format: DATE - ISSUE_NUMBER - STATUS_CHANGE
 2026-04-21 - Issue 3 - VERIFIED: Rasterizer coverage now matches (25.67%)
 
 2026-04-21 - Issue 4 - VERIFIED: Barycentric coordinate mapping is correct
+
+2026-04-21 - Issue 7 - FIXED: nvdiffrec dependency removed and replaced with
+  pure PyTorch PBR implementation
 
 ================================================================================
 END OF POTENTIAL ISSUES

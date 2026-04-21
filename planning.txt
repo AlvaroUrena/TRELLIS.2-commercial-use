@@ -34,6 +34,12 @@ Fork (DRTK):
 
 Official (nvdiffrast) must not be executed because its not necessary (it will not change and its already stored in test_output_official)
 
+## For PBR/Texturing Tests:
+
+Fork (DRTK):
+  cd ~/Documents/AI/TRELLIS.2-commercial-use
+  TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py 2>&1 | tee test_output/debug_pbr_fork.log
+
 ## Compare Outputs
 
   cd ~/Documents/AI/TRELLIS.2-commercial-use
@@ -45,6 +51,7 @@ Official (nvdiffrast) must not be executed because its not necessary (it will no
   - test_output/debug/*.npy        - Saved tensor files
   - test_output/normal_00.png      - Rendered normal map (visual check)
   - test_output/depth_00.png      - Rendered depth map (visual check)
+  - test_output_pbr/               - PBR render outputs
   - potential_issues.txt           - Tracked issues (update after each fix)
 
 ================================================================================
@@ -162,6 +169,114 @@ RESULTS:
   rasterization algorithms handling z-fighting and edge sampling differently.
 
 ================================================================================
+PHASE 6: PBR RENDERER VERIFICATION
+================================================================================
+
+STATUS: IN_PROGRESS
+
+CONTEXT:
+   After MeshRenderer is verified, test PbrMeshRenderer which uses:
+   - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
+   - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
+   - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
+   - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
+
+NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
+      is only used for MeshWithPbrMaterial (UV-textured meshes), which is
+      different from the voxel-based pipeline tested here.
+
+FILES TO CHECK:
+   - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
+   - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
+   - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
+   - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
+
+KEY COMPONENTS:
+   1. DepthPeeler.rasterize_next_layer() [DRTK]:
+      - Calls DRTKContext.rasterize() per layer
+      - Filters out previously rendered triangles by depth
+      - Used for multi-layer transparency rendering
+
+   2. grid_sample_3d [flex_gemm]:
+      - Samples voxel attributes at interpolated 3D positions
+      - Interpolates base_color, metallic, roughness, alpha from voxel grid
+
+   3. PBREnvironmentLight.shade() [Pure PyTorch]:
+      - Computes diffuse irradiance from environment map
+      - Computes specular reflections using split-sum approximation
+      - Uses precomputed BSDF LUT for BRDF integration
+      - Replaces nvdiffrec's EnvironmentLight
+
+TEST APPROACH:
+   1. Run test_render_pbr.py on both fork and official
+   2. Compare outputs using compare_pbr.py
+   3. Compare intermediate values:
+      - base_color, metallic, roughness, alpha from grid_sample_3d
+      - shaded output from PBREnvironmentLight.shade()
+
+COMPARISON POINTS:
+   - Mask coverage should match MeshRenderer results
+   - base_color, metallic, roughness, alpha should have same range
+   - shaded output should match in brightness and color
+
+CURRENT FINDINGS:
+   - PBR rendering completes without errors
+   - Mask coverage nearly identical (67266 vs 67280)
+   - Shaded output DIMMER in fork (max 0.68 vs 1.0)
+   - Material values LOWER in fork (base_color max 0.54 vs 1.0)
+   - Possible issue: PBREnvironmentLight.shade() or grid_sample_3d differences
+
+COMPARISON SCRIPT:
+   - Use compare_pbr.py to compare test_output_pbr vs test_output_pbr_official
+
+================================================================================
+PHASE 7: GLB EXPORT VERIFICATION
+================================================================================
+
+STATUS: PENDING
+
+CONTEXT:
+  After PBR rendering is verified, test GLB export which includes:
+  - Mesh geometry (vertices, faces)
+  - PBR materials (base_color, metallic, roughness textures)
+  - UV coordinates
+  - Material assignments
+
+FILES TO CHECK:
+  - trellis2/utils/glb_utils.py - GLB export utilities
+  - o_voxel/postprocess/to_glb(...) - Main export function
+
+KEY FUNCTIONS:
+  1. o_voxel.postprocess.to_glb():
+     - Converts MeshWithVoxel to trimesh.Trimesh with PBR materials
+     - Bakes voxel attributes to textures
+     - Creates UV coordinates via xatlas
+
+  2. glb_utils.export_glb_fixed():
+     - Exports trimesh to GLB format
+     - Fixes bufferView targets for WebGL compatibility
+
+TEST APPROACH:
+  1. Create test_glb_export.py that generates a GLB file
+  2. Compare GLB file sizes between fork and official
+  3. Load both GLBs in a viewer (e.g., Blender) and compare visually
+  4. Check GLB structure with pygltflib:
+     - Verify materials array exists
+     - Verify textures exist
+     - Verify mesh.primitives have correct attributes
+
+COMPARISON POINTS:
+  - GLB file should load without errors in Blender/Godot/etc.
+  - Materials should have base_color_texture, metallic_roughness_texture
+  - UV coordinates should be non-degenerate
+  - Vertex normals should be present
+
+DEBUG FILES TO MONITOR:
+  - test_output_pbr/*.glb - Exported GLB files
+  - Compare file sizes (should be similar)
+  - Use `glb_validator` tool or pygltflib to inspect structure
+
+================================================================================
 TROUBLESHOOTING GUIDE
 ================================================================================
 
@@ -189,6 +304,18 @@ TROUBLESHOOTING GUIDE
   - Check bary_img has correct shape [1, 3, H, W]
   - Ensure attr tensor shape matches faces indexing
 
+## If PBR rendering shows artifacts:
+  - Check DepthPeeler is correctly filtering by depth
+  - Verify texture() returns correct mipmap levels
+  - Check UV coordinates (texc) are in valid range [0,1]
+  - Verify texd (derivatives) are computed correctly
+
+## If GLB export fails:
+  - Check o_voxel package is installed correctly
+  - Verify xatlas is available for UV generation
+  - Check mesh.attrs has correct layout (base_color, metallic, roughness, alpha)
+  - Use pygltflib to validate GLB structure
+
 ================================================================================
 IMPORTANT REMINDERS
 ================================================================================
@@ -208,6 +335,7 @@ IMPORTANT REMINDERS
 
 5. The official nvdiffrast implementation is in:
    - ~/Documents/AI/TRELLIS.2/trellis2/renderers/mesh_renderer.py
+   - ~/Documents/AI/TRELLIS.2/trellis2/renderers/pbr_mesh_renderer.py
    - For reference, compare DRTK API to nvdiffrast API
 
 6. Git commits after each fix, NEVER push.
@@ -216,6 +344,7 @@ IMPORTANT REMINDERS
    - API Reference: https://drtk.xyz/api_reference/index.html
      - Check rasterize() and render() function signatures
      - Check interpolate() function signature and output format
+     - Check mipmap_grid_sample() for texture filtering
    - Tutorials: https://drtk.xyz/tutorials/index.html
      - Read relevant tutorials for mesh rendering
      - Check coordinate system conventions
@@ -230,6 +359,7 @@ When fixing DRTK-related issues, consult:
    - drtk.rasterize(vertices, faces, height, width) -> index_img
    - drtk.render(vertices, faces, index_img) -> (depth, bary)
    - drtk.interpolate(attr, faces, index_img, bary) -> result
+   - drtk.mipmap_grid_sample(mipmaps, uv, jacobian) -> result
 
 2. **Key Tutorials**:
    - https://drtk.xyz/tutorials/mesh_rendering.html (if exists)
@@ -242,17 +372,24 @@ When fixing DRTK-related issues, consult:
      dr.rasterize(glctx, vertices_clip, faces, (H, W)) -> (rast, rast_db)
      dr.interpolate(attr, rast, faces) -> (result, derivs)
      dr.texture(tex, uv, uv_da) -> (result, derivs)
+     dr.DepthPeeler(glctx, vertices_clip, faces, (H, W)) -> peeler
 
    DRTK:
      drtk.rasterize(v_pix, faces, height, width) -> index_img
      drtk.render(v_pix, faces, index_img) -> (depth, bary)
      drtk.interpolate(attr, faces, index_img, bary) -> result
      drtk.mipmap_grid_sample(mipmaps, uv, jacobian) -> result
+     (Custom DepthPeeler class in drtk_compat.py)
 
 4. **Coordinate Conventions**:
    - nvdiffrast: clip-space [N, V, 4] with perspective division
    - DRTK: pixel-space [N, V, 3] with (x, y, z_camera)
    - Conversion in drtk_compat.py lines ~155-165
+
+5. **Texture Sampling**:
+   - nvdiffrast: dr.texture() uses automatic derivatives (uv_da)
+   - DRTK: Need to compute Jacobian manually via compute_uv_jacobian()
+   - Mipmap filtering: DRTK uses mipmap_grid_sample()
 
 ================================================================================
 END OF PLANNING
