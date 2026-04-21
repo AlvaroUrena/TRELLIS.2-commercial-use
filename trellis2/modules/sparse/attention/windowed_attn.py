@@ -58,7 +58,8 @@ def calc_window_partition(
     elif config.ATTN == 'flash_attn':
         attn_func_args = {
             'cu_seqlens': torch.cat([torch.tensor([0], device=tensor.device), torch.cumsum(seq_lens, dim=0)], dim=0).int(),
-            'max_seqlen': torch.max(seq_lens)
+            'max_seqlen': torch.max(seq_lens),
+            'deterministic': True
         }
 
     return fwd_indices, bwd_indices, seq_lens, attn_func_args

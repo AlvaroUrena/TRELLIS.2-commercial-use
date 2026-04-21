@@ -1,13 +1,19 @@
-import warnings
-warnings.filterwarnings("ignore", message="Importing from timm.models.layers is deprecated")
-warnings.filterwarnings("ignore", message="Importing from timm.models.registry is deprecated")
-warnings.filterwarnings("ignore", message="`torch.cuda.amp.autocast")
+import torch
+torch.manual_seed(42)
+torch.cuda.manual_seed_all(42)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 import os
 os.environ['TRELLIS_DEBUG'] = '1'
 os.environ['TRELLIS_DEBUG_DIR'] = 'test_output/debug'
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+import warnings
+warnings.filterwarnings("ignore", message="Importing from timm.models.layers is deprecated")
+warnings.filterwarnings("ignore", message="Importing from timm.models.registry is deprecated")
+warnings.filterwarnings("ignore", message="`torch.cuda.amp.autocast")
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

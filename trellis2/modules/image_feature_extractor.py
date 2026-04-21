@@ -79,8 +79,17 @@ class DinoV3FeatureExtractor:
         self.model.cpu()
 
     def extract_features(self, image: torch.Tensor) -> torch.Tensor:
-        output = self.model(image)
-        return output.last_hidden_state
+        image = image.to(self.model.embeddings.patch_embeddings.weight.dtype)
+        hidden_states = self.model.embeddings(image, bool_masked_pos=None)
+        position_embeddings = self.model.rope_embeddings(image)
+
+        for i, layer_module in enumerate(self.model.model.layer):
+            hidden_states = layer_module(
+                hidden_states,
+                position_embeddings=position_embeddings,
+            )
+
+        return F.layer_norm(hidden_states, hidden_states.shape[-1:])
         
     @torch.no_grad()
     def __call__(self, image: Union[torch.Tensor, List[Image.Image]]) -> torch.Tensor:
