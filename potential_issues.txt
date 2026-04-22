@@ -374,22 +374,26 @@ VERIFICATION:
      - Shaded brightness ratio: 1.002 - matches within tolerance
 
  ================================================================================
- ISSUE 14: SHADED IMAGE DIFFERS FROM OFFICIAL
+ ISSUE 14: SHADED IMAGE QUALITY DIFFERS FROM OFFICIAL
  ================================================================================
  
- STATUS: [RESOLVED] - NOT A BUG, EXPECTED BEHAVIOR
+ STATUS: [IN_PROGRESS] - Visual quality issue needs investigation
  
- SEVERITY: INFO - Different rasterization algorithms and stochastic SSAO
+ SEVERITY: HIGH - Fork shaded output appears visually different/worse
  
  DESCRIPTION:
       All PBR material channels (base_color, metallic, roughness, alpha) now match
-      official perfectly, but the final shaded_00.png image shows differences.
+      official perfectly, but the final shaded_00.png image shows significant
+      visual quality difference.
       
  COMPARISON RESULTS:
       - shaded fork:      min=0.0000, max=255.0000, mean=8.3620
       - shaded official:  min=0.0000, max=255.0000, mean=8.1539
-      - diff: mean=26.2923, max=247.0000 (on 0-255 scale = mean diff 0.103 on 0-1)
-      - Brightness ratio: 1.026 (matches within tolerance)
+      - diff: mean=26.2923, max=247.0000 (on 0-255 scale)
+      - Brightness ratio: 1.026 (misleading - masks real quality difference)
+      - Diff where both have geometry: mean=0.1019 on 0-1 scale
+      
+      User reports significant visual quality difference despite similar means.
       
       Material channels all match:
       - base_color: diff mean=0.1097
@@ -398,40 +402,66 @@ VERIFICATION:
       - alpha: diff mean=0.2174
       - normal: diff mean=0.1949 (excellent match)
  
- ROOT CAUSE:
-      This is NOT a bug. The differences are expected due to:
-      
-      1. Rasterization algorithm differences (DRTK vs nvdiffrast):
-         - Different triangle ID assignment at edges
-         - Different z-fighting resolution
-         - Different edge handling
-         - ~3% of pixels have different triangle IDs
-         
-      2. Stochastic SSAO (Screen Space Ambient Occlusion):
-         - Both implementations use torch.randn() and torch.rand() in SSAO loop
-         - 64 random samples per pixel
-         - Different random samples produce different occlusion values
-         - This is inherent to SSAO algorithm, not a bug
-         
-      3. Depth convention difference:
-         - DRTK outputs camera-space z [9.66, 10.27]
-         - nvdiffrast outputs normalized depth z/w [0.81, 0.82]
-         - But both use vertices_camera[..., 2:3] for SSAO input
-         - So SSAO depth input is actually the same
+ PRELIMINARY FIXES:
+      - sample_cubemap_mip() fixed to use per-pixel mip level sampling
+      - SSAO made deterministic with seed parameter
  
- VERIFICATION:
-      - Diff where both have geometry: mean=0.1019 on 0-1 scale (acceptable)
-      - Brightness ratio: 1.026 (matches within 3% tolerance)
-      - Material values match perfectly (diff < 0.3 on 0-255 scale)
-      - Normal maps match excellently (diff mean=0.0008)
-      - Mask coverage matches (67266 vs 67280 pixels)
+ POSSIBLE REMAINING CAUSES TO INVESTIGATE:
       
- CONCLUSION:
-      The shaded output differences are expected behavior from using different
-      rasterizers (DRTK vs nvdiffrast) and stochastic SSAO sampling. Both
-      implementations are correct, and the visual quality is comparable.
-      
-      No fix needed. The fork produces valid PBR renders.
+      1. SAMPLE_CUBEMAP_MIP CORRECTNESS:
+         - Verify the per-pixel mip fix actually samples correctly
+         - Check if mip level interpolation is correct
+         - Compare specular highlight regions between fork and official
+         
+      2. DIFFUSE CUBEMAP COMPUTATION:
+         - compute_diffuse_cubemap_vectorized() may have errors
+         - Compare diffuse irradiance values at specific directions
+         - Check cosine-weighted hemisphere sampling
+         
+      3. SPECULAR PREFILTER COMPUTATION:
+         - compute_specular_prefilter_vectorized() may have errors
+         - GGX importance sampling may be incorrect
+         - Verify roughness -> mip level mapping
+         
+      4. CUBEMAP SAMPLING (sample_cubemap):
+         - dir_to_cube_face_and_uv() may have coordinate convention issues
+         - Face selection logic may be wrong
+         - UV coordinate computation may have errors
+         
+      5. SSAO DEPTH USAGE:
+         - Check if SSAO radius/scale is appropriate for DRTK depth values
+         - DRTK uses camera-space z [9.66, 10.27], not normalized z/w
+         - SSAO view_pos computation may need adjustment
+         
+      6. SHADING NORMAL ISSUES:
+         - gb_normal computation may have sign or orientation issues
+         - Normal interpolation may be wrong
+         - Check if normals point in correct direction for PBR
+
+ INVESTIGATION STEPS:
+      1. Save intermediate tensors from PBREnvironmentLight.shade():
+         - diffuse lookup values
+         - specular lookup values  
+         - fg_lookup values
+         - NdotV, roughness values
+      2. Compare pixel-by-pixel in specific regions:
+         - Bright specular highlights
+         - Dark shadowed areas
+         - Edge regions
+      3. Visualize difference heatmap to identify pattern
+      4. Test with SSAO disabled to isolate shading issues
+      5. Test with simple diffuse-only material to check diffuse term
+ 
+ FILES TO INVESTIGATE:
+      - trellis2/renderers/pbr_envmap.py
+        * sample_cubemap() - cube face selection and UV
+        * sample_cubemap_mip() - mip level interpolation
+        * compute_diffuse_cubemap_vectorized() - diffuse prefilter
+        * compute_specular_prefilter_vectorized() - specular prefilter
+        * PBREnvironmentLight.shade() - main shading function
+      - trellis2/renderers/pbr_mesh_renderer.py
+        * screen_space_ambient_occlusion() - SSAO with depth
+        * render() - gb_normal, gb_cam_normal computation
 
 ================================================================================
 ISSUE 13: DEPTH PEELER INDEX_IMG FILTERING BUG (FIXED)
@@ -482,7 +512,8 @@ VERIFICATION:
  2026-04-22 - Issue 14 - DISCOVERED: Shaded image differs from official
  2026-04-22 - Issue 14 - INVESTIGATION: sample_cubemap_mip bug (global mip level)
  2026-04-22 - Issue 14 - FIXED: Per-pixel mip level sampling
- 2026-04-22 - Issue 14 - RESOLVED: Different rasterizers + stochastic SSAO (expected)
+ 2026-04-22 - Issue 14 - REOPENED: User reports visual quality difference
+ 2026-04-22 - Issue 14 - IN_PROGRESS: Investigating shading pipeline
 
  ================================================================================
  CRITICAL FINDINGS FOR ISSUE 12 (2026-04-22 Updated)

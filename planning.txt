@@ -168,75 +168,97 @@ RESULTS:
   NOTE: Exact pixel differences at edges are expected due to different
   rasterization algorithms handling z-fighting and edge sampling differently.
 
-================================================================================
-PHASE 6: PBR RENDERER VERIFICATION
+ ================================================================================
+ PHASE 6: PBR RENDERER VERIFICATION
  ================================================================================
  
- STATUS: COMPLETE
+ STATUS: IN_PROGRESS - Investigating shaded output quality
+ 
+ CONTEXT:
+    After MeshRenderer is verified, test PbrMeshRenderer which uses:
+    - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
+    - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
+    - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
+    - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
 
-CONTEXT:
-   After MeshRenderer is verified, test PbrMeshRenderer which uses:
-   - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
-   - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
-   - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
-   - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
+ NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
+       is only used for MeshWithPbrMaterial (UV-textured meshes), which is
+       different from the voxel-based pipeline tested here.
 
-NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
-      is only used for MeshWithPbrMaterial (UV-textured meshes), which is
-      different from the voxel-based pipeline tested here.
-
-FILES TO CHECK:
-   - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
-   - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
-   - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
-   - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
+ FILES TO CHECK:
+    - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
+    - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
+    - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
+    - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
 
  KEY COMPONENTS VERIFIED:
      1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
         - Now preserves original triangle IDs in rast[..., 3]
         - interpolate() now correctly reconstructs index_img from rast
  
-     2. PBREnvironmentLight.shade() [Pure PyTorch]:
-         ✓ VERIFIED: Produces IDENTICAL output to nvdiffrec EnvironmentLight
- 
-     3. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
+     2. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
         - Root cause: Non-contiguous memory layout after reshape
         - Fix: Added .contiguous() after reshape of xyz_voxel
         - All PBR material channels now match official exactly
  
-     4. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14)
+     3. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14 partial)
         - Root cause: Used global minimum mip level for ALL pixels
         - Fix: Per-pixel mip level sampling with proper interpolation
-        - Specular highlights now correctly use per-pixel roughness
+        - Need to verify specular highlights are correct
  
- CRITICAL FINDINGS:
-     ✓ Mesh geometry matches (Issue 1 fixed)
-     ✓ Voxel attrs now match official (Issue 6 fixed)
-     ✓ Mask coverage identical (67266 vs 67280)
-     ✓ Model orientation correct (Issue 11 fixed)
-     ✓ DepthPeeler triangle IDs fixed (Issue 13 fixed)
-     ✓ grid_sample_3d contiguous memory fix (Issue 12 fixed)
-     ✓ Per-pixel specular mip sampling (Issue 14 fixed)
- 
- VERIFICATION (All material channels match official):
+ COMPONENTS NEEDING INVESTIGATION:
+     4. sample_cubemap() - Cube face selection and UV mapping
+        - dir_to_cube_face_and_uv() may have coordinate issues
+        - Face selection logic may differ from nvdiffrec
+        
+     5. compute_diffuse_cubemap_vectorized()
+        - Cosine-weighted hemisphere sampling
+        - Tangent frame construction
+        - Integration accuracy
+        
+     6. compute_specular_prefilter_vectorized()
+        - GGX importance sampling correctness
+        - Roughness -> mip level mapping
+        - Prefilter quality
+        
+     7. PBREnvironmentLight.shade()
+        - Verify diffuse lookup is correct
+        - Verify specular lookup is correct
+        - Verify FG LUT lookup coordinates
+        
+     8. screen_space_ambient_occlusion()
+        - Depth convention for DRTK (camera-space z)
+        - View-space position computation
+        - Occlusion calculation
+
+ VERIFICATION METRICS:
      - Base color mean: 8.527 (official: 8.534) - matches!
      - Metallic mean: 60.762 (official: 60.779) - matches!
      - Roughness mean: 13.545 (official: 13.543) - matches!
      - Alpha mean: 45.339 (official: 45.363) - matches!
-     - Shaded brightness ratio: 1.026 (within 3% tolerance)
+     - Shaded brightness ratio: 1.026 (material channels match, but visual quality differs)
      - Diff where both have geometry: mean=0.1019 on 0-1 scale
- 
- NOTE: Shaded output shows expected differences:
-     - Different rasterizers (DRTK vs nvdiffrast) handle edges differently
-     - Stochastic SSAO sampling is non-deterministic
-     - Both implementations are correct and produce comparable quality
+     - Max diff: 247/255 (nearly 1.0) - indicates significant local differences!
+
+ INVESTIGATION PLAN:
+     1. Add debug output to save intermediate tensors:
+        - After diffuse lookup
+        - After specular lookup
+        - After FG lookup
+        - NdotV, roughness per pixel
+     2. Compare pixel values in specific regions:
+        - Bright specular highlights
+        - Dark/shadowed areas
+        - Edge regions
+     3. Test with SSAO disabled
+     4. Test with specular disabled (diffuse-only)
+     5. Compare sample_cubemap output vs nvdiffrec dr.texture
+     6. Check cubemap face convention matches
 
  TEST VERIFICATION:
      - Run: TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py
      - Compare: python compare_pbr.py
-     - Key metrics (all match within tolerance):
-       - base_color mean: ~8.5
-       - shaded mean: ~8.2-8.4
+     - Visual inspection: compare fork vs official shaded images side-by-side
 
 ================================================================================
 PHASE 7: GLB EXPORT VERIFICATION
