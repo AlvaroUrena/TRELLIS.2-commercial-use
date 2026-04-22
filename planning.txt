@@ -172,7 +172,7 @@ RESULTS:
 PHASE 6: PBR RENDERER VERIFICATION
 ================================================================================
 
-STATUS: IN PROGRESS - Two critical issues (11 and 12) need fixing
+STATUS: IN PROGRESS - Issue 12 (grid_sample_3d returns zeros) needs fixing
 
 CONTEXT:
    After MeshRenderer is verified, test PbrMeshRenderer which uses:
@@ -192,41 +192,39 @@ FILES TO CHECK:
    - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
 
 KEY COMPONENTS VERIFIED:
-   1. DepthPeeler.rasterize_next_layer() [DRTK]:
-      ✓ Calls DRTKContext.rasterize() per layer
-      ✓ Filters out previously rendered triangles by depth
-      ✓ Works correctly for opaque meshes
+   1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
+      - Now preserves original triangle IDs in rast[..., 3]
+      - interpolate() now correctly reconstructs index_img from rast
 
    2. PBREnvironmentLight.shade() [Pure PyTorch]:
-      ✓ VERIFIED: Produces IDENTICAL output to nvdiffrec EnvironmentLight
-      ✓ Diffuse irradiance sampling works correctly
-      ✓ BSDF LUT matches official
-      ✓ Specular reflections match official
+       ✓ VERIFIED: Produces IDENTICAL output to nvdiffrec EnvironmentLight
 
-   3. grid_sample_3d [flex_gemm]:
-      ✓ VERIFIED: Produces correct output when given same xyz_voxel as official
-      ✗ PROBLEM: DRTK produces different xyz_voxel values than nvdiffrast
-      ✗ These different xyz values cause sparse grid sampling to return near-zero values
+   3. grid_sample_3d [flex_gemm]: ✗ BUG - Returns all zeros
+      - xyz_voxel range matches mesh.coords: X[0,512], Y[158,355], Z[27,494]
+      - But grid_sample_3d returns zeros for all queries
+      - Need to investigate: flex_gemm sparse grid implementation
 
 CRITICAL FINDINGS:
    ✓ Mesh geometry matches (Issue 1 fixed)
    ✓ Voxel attrs now match official (Issue 6 fixed)
    ✓ Mask coverage identical (67266 vs 67280)
-   ✓ PBREnvironmentLight works correctly (tested with same inputs as official)
-   ✗ Issue 11: Model orientation inverted (ALL PBR outputs show T upside-down)
-   ✗ Issue 12: PBR materials very dim (~60x dimmer, must be fixed to match official)
+   ✓ Model orientation correct (Issue 11 fixed)
+   ✓ DepthPeeler triangle IDs fixed (Issue 13 fixed)
+   ✗ Issue 12: grid_sample_3d returns zeros (~60x dimmer output)
 
-ISSUE 11: Model orientation inverted (PENDING)
-   - T character appears upside-down in ALL fork PBR outputs
-   - UNRELATED to material rendering quality
-   - Likely Y-axis flip in DRTK rasterization/coordinate system
-   - Investigate: DRTK Y-axis convention, pixel coordinate origin
-   - Check: trellis2/utils/drtk_compat.py line ~165 (y_ndc = -vertices_clip[..., 1] / w_clip)
+ISSUE 12: grid_sample_3d returns zeros (CRITICAL)
+    - grid_sample_3d from flex_gemm returns all zeros
+    - xyz_voxel coordinates match mesh.coords range
+    - Issue appears to be in flex_gemm.grid_sample_3d sparse grid handling
+    - Need to investigate:
+      1. Coordinate ordering in grid_sample_3d (XYZ vs DWH)
+      2. Sparse grid indexing in flex_gemm
+      3. torch.cat([zeros, coords], dim=-1) padding format
 
-ISSUE 12: PBR materials dim (CRITICAL - MUST FIX)
-   - Model BARELY VISIBLE despite correct mask coverage
-   - PBREnvironmentLight.shade() works correctly (VERIFIED)
-   - grid_sample_3d works correctly with correct xyz_voxel input
+ISSUE 13: DepthPeeler index_img filtering (FIXED)
+    - DepthPeeler was using filtered index_img for rast[..., 3]
+    - This caused all geometry pixels to have triangle ID = -1 on layers > 0
+    - Fixed by preserving original index_img before filtering
    - ROOT CAUSE: DRTK produces different xyz_voxel values than nvdiffrast
    
    EVIDENCE:
