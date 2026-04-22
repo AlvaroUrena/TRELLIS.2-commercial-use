@@ -377,23 +377,37 @@ VERIFICATION:
  ISSUE 14: SHADED IMAGE QUALITY DIFFERS FROM OFFICIAL
  ================================================================================
  
- STATUS: [IN_PROGRESS] - Visual quality issue needs investigation
+ STATUS: [FIXED] - cube_to_dir coordinate mapping corrected
  
- SEVERITY: HIGH - Fork shaded output appears visually different/worse
+ SEVERITY: HIGH - Fork shaded output appeared with inverted lighting
  
  DESCRIPTION:
-      All PBR material channels (base_color, metallic, roughness, alpha) now match
-      official perfectly, but the final shaded_00.png image shows significant
-      visual quality difference.
+      All PBR material channels (base_color, metallic, roughness, alpha) matched
+      official perfectly, but the final shaded image showed inverted lighting
+      (light side at bottom instead of top).
       
- COMPARISON RESULTS:
-      - shaded fork:      min=0.0000, max=255.0000, mean=8.3620
-      - shaded official:  min=0.0000, max=255.0000, mean=8.1539
-      - diff: mean=26.2923, max=247.0000 (on 0-255 scale)
-      - Brightness ratio: 1.026 (misleading - masks real quality difference)
-      - Diff where both have geometry: mean=0.1019 on 0-1 scale
+ ROOT CAUSE:
+      The cube_to_dir function in pbr_envmap.py and pbr_mesh_renderer.py had
+      incorrect coordinate mappings that didn't match nvdiffrec's convention.
       
-      User reports significant visual quality difference despite similar means.
+      nvdiffrec convention:
+      - Face 0 (+X): (rx, ry, rz) = (1, -y, -x)  
+      - Face 1 (-X): (rx, ry, rz) = (-1, -y, x)
+      - Face 2 (+Y): (rx, ry, rz) = (x, 1, y)
+      - Face 3 (-Y): (rx, ry, rz) = (x, -1, -y)
+      - Face 4 (+Z): (rx, ry, rz) = (x, -y, 1)
+      - Face 5 (-Z): (rx, ry, rz) = (-x, -y, -1)
+      
+      Fork had Y and Z coordinates swapped in multiple faces.
+      
+ FIX:
+      Corrected cube_to_dir in both files to match nvdiffrec's convention.
+      Also fixed dir_to_cube_face_and_uv() to properly invert the mappings.
+      
+ VERIFICATION:
+      - Bright spots now appear in upper region (same as official)
+      - Fork bright centroid: y=169.7, Official: y=161.7 (both in upper half)
+      - Brightness distribution matches: top-heavier for both
       
       Material channels all match:
       - base_color: diff mean=0.1097
@@ -401,67 +415,10 @@ VERIFICATION:
       - roughness: diff mean=0.1363
       - alpha: diff mean=0.2174
       - normal: diff mean=0.1949 (excellent match)
- 
- PRELIMINARY FIXES:
-      - sample_cubemap_mip() fixed to use per-pixel mip level sampling
-      - SSAO made deterministic with seed parameter
- 
- POSSIBLE REMAINING CAUSES TO INVESTIGATE:
-      
-      1. SAMPLE_CUBEMAP_MIP CORRECTNESS:
-         - Verify the per-pixel mip fix actually samples correctly
-         - Check if mip level interpolation is correct
-         - Compare specular highlight regions between fork and official
-         
-      2. DIFFUSE CUBEMAP COMPUTATION:
-         - compute_diffuse_cubemap_vectorized() may have errors
-         - Compare diffuse irradiance values at specific directions
-         - Check cosine-weighted hemisphere sampling
-         
-      3. SPECULAR PREFILTER COMPUTATION:
-         - compute_specular_prefilter_vectorized() may have errors
-         - GGX importance sampling may be incorrect
-         - Verify roughness -> mip level mapping
-         
-      4. CUBEMAP SAMPLING (sample_cubemap):
-         - dir_to_cube_face_and_uv() may have coordinate convention issues
-         - Face selection logic may be wrong
-         - UV coordinate computation may have errors
-         
-      5. SSAO DEPTH USAGE:
-         - Check if SSAO radius/scale is appropriate for DRTK depth values
-         - DRTK uses camera-space z [9.66, 10.27], not normalized z/w
-         - SSAO view_pos computation may need adjustment
-         
-      6. SHADING NORMAL ISSUES:
-         - gb_normal computation may have sign or orientation issues
-         - Normal interpolation may be wrong
-         - Check if normals point in correct direction for PBR
 
- INVESTIGATION STEPS:
-      1. Save intermediate tensors from PBREnvironmentLight.shade():
-         - diffuse lookup values
-         - specular lookup values  
-         - fg_lookup values
-         - NdotV, roughness values
-      2. Compare pixel-by-pixel in specific regions:
-         - Bright specular highlights
-         - Dark shadowed areas
-         - Edge regions
-      3. Visualize difference heatmap to identify pattern
-      4. Test with SSAO disabled to isolate shading issues
-      5. Test with simple diffuse-only material to check diffuse term
- 
- FILES TO INVESTIGATE:
-      - trellis2/renderers/pbr_envmap.py
-        * sample_cubemap() - cube face selection and UV
-        * sample_cubemap_mip() - mip level interpolation
-        * compute_diffuse_cubemap_vectorized() - diffuse prefilter
-        * compute_specular_prefilter_vectorized() - specular prefilter
-        * PBREnvironmentLight.shade() - main shading function
-      - trellis2/renderers/pbr_mesh_renderer.py
-        * screen_space_ambient_occlusion() - SSAO with depth
-        * render() - gb_normal, gb_cam_normal computation
+ FILES MODIFIED:
+      - trellis2/renderers/pbr_envmap.py - cube_to_dir() and dir_to_cube_face_and_uv()
+      - trellis2/renderers/pbr_mesh_renderer.py - cube_to_dir()
 
 ================================================================================
 ISSUE 13: DEPTH PEELER INDEX_IMG FILTERING BUG (FIXED)

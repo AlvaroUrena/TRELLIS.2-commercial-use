@@ -31,19 +31,28 @@ def dot(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def cube_to_dir(s: int, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    """Convert cube face coordinates to 3D direction vectors."""
+    """Convert cube face coordinates to 3D direction vectors.
+    
+    Convention matches nvdiffrec:
+    Face 0 (+X): direction (1, -y, -x) maps UV (x,y)
+    Face 1 (-X): direction (-1, -y, x) maps UV (x,y)
+    Face 2 (+Y): direction (x, 1, y) maps UV (x,y)
+    Face 3 (-Y): direction (x, -1, -y) maps UV (x,y)
+    Face 4 (+Z): direction (x, -y, 1) maps UV (x,y)
+    Face 5 (-Z): direction (-x, -y, -1) maps UV (x,y)
+    """
     if s == 0:
-        rx, ry, rz = torch.ones_like(x), -x, -y
+        rx, ry, rz = torch.ones_like(x), -y, -x
     elif s == 1:
-        rx, ry, rz = -torch.ones_like(x), x, -y
+        rx, ry, rz = -torch.ones_like(x), -y, x
     elif s == 2:
-        rx, ry, rz = x, y, torch.ones_like(x)
+        rx, ry, rz = x, torch.ones_like(x), y
     elif s == 3:
-        rx, ry, rz = x, -y, -torch.ones_like(x)
+        rx, ry, rz = x, -torch.ones_like(x), -y
     elif s == 4:
-        rx, ry, rz = x, torch.ones_like(x), -y
+        rx, ry, rz = x, -y, torch.ones_like(x)
     elif s == 5:
-        rx, ry, rz = -x, -torch.ones_like(x), -y
+        rx, ry, rz = -x, -y, -torch.ones_like(x)
     return torch.stack((rx, ry, rz), dim=-1)
 
 
@@ -52,8 +61,16 @@ def dir_to_cube_face_and_uv(directions: torch.Tensor) -> Tuple[torch.Tensor, tor
     
     Fully vectorized - no Python loops over faces.
     
+    Convention matches nvdiffrec cube_to_dir:
+    Face 0 (+X): (1, -y, -x) maps UV (x,y), so direction (dx, dy, dz) -> u=-dz/|dx|, v=-dy/|dx|
+    Face 1 (-X): (-1, -y, x) maps UV (x,y), so direction -> u=dz/|dx|, v=-dy/|dx|
+    Face 2 (+Y): (x, 1, y) maps UV (x,y), so direction -> u=dx/|dy|, v=dz/|dy|
+    Face 3 (-Y): (x, -1, -y) maps UV (x,y), so direction -> u=dx/|dy|, v=-dz/|dy|
+    Face 4 (+Z): (x, -y, 1) maps UV (x,y), so direction -> u=dx/|dz|, v=-dy/|dz|
+    Face 5 (-Z): (-x, -y, -1) maps UV (x,y), so direction -> u=-dx/|dz|, v=-dy/|dz|
+    
     Args:
-        directions: [..., 3] normalized direction vectors
+        directions: [..., 3] normalized direction vectors (x, y, z) = (dx, dy, dz)
         
     Returns:
         faces: [...] int64 face indices (0-5)
@@ -72,17 +89,23 @@ def dir_to_cube_face_and_uv(directions: torch.Tensor) -> Tuple[torch.Tensor, tor
     is_z_major = ~is_x_major & ~is_y_major
     
     # Compute UV coordinates for each face projection
-    # Face 0: +X, Face 1: -X, Face 2: +Y, Face 3: -Y, Face 4: +Z, Face 5: -Z
+    # These are inverses of cube_to_dir mappings
     
-    # For X-major faces
+    # For X-major faces (0: +X, 1: -X)
+    # +X: (1, -y, -x), so u=-z/x, v=-y/x for x>0
+    # -X: (-1, -y, x), so u=z/|x|, v=-y/|x| for x<0
     u_x = torch.where(x > 0, (-z / abs_x + 1) * 0.5, (z / abs_x + 1) * 0.5)
     v_x = (-y / abs_x + 1) * 0.5
     
-    # For Y-major faces  
-    u_y = torch.where(y > 0, (x / abs_y + 1) * 0.5, (x / abs_y + 1) * 0.5)
+    # For Y-major faces (2: +Y, 3: -Y)
+    # +Y: (x, 1, y), so u=x/|y|, v=z/|y|
+    # -Y: (x, -1, -y), so u=x/|y|, v=-z/|y|
+    u_y = (x / abs_y + 1) * 0.5
     v_y = torch.where(y > 0, (z / abs_y + 1) * 0.5, (-z / abs_y + 1) * 0.5)
     
-    # For Z-major faces
+    # For Z-major faces (4: +Z, 5: -Z)
+    # +Z: (x, -y, 1), so u=x/|z|, v=-y/|z|
+    # -Z: (-x, -y, -1), so u=-x/|z|, v=-y/|z|
     u_z = torch.where(z > 0, (x / abs_z + 1) * 0.5, (-x / abs_z + 1) * 0.5)
     v_z = (-y / abs_z + 1) * 0.5
     
@@ -640,8 +663,8 @@ class PBREnvironmentLight(torch.nn.Module):
             
             miplevel = self.get_mip(roughness)
             spec = sample_cubemap_mip(self.specular, reflvec, miplevel[..., 0])
-            spec = torch.lerp(spec, diffuse, roughness)
             
+            # Compute aggregate lighting (split-sum approximation)
             reflectance = spec_col * fg_lookup[..., 0:1] + fg_lookup[..., 1:2]
             shaded_col = shaded_col + spec * reflectance
         
