@@ -259,43 +259,49 @@ VERIFICATION:
    - No nvdiffrast import errors
 
 ================================================================================
-ISSUE 9: PBREnvironmentLight produces dimmer output than nvdiffrec
+ISSUE 9: PBR rendering produces dimmer output than official
 ================================================================================
 
-STATUS: [PENDING]
+STATUS: [IN_PROGRESS]
 
-SEVERITY: MEDIUM - PBR render looks dimmer than official
+SEVERITY: MEDIUM - PBR render looks ~60x dimmer than official
 
 DESCRIPTION:
-   The pure PyTorch PBREnvironmentLight.shade() produces output that is
-   significantly dimmer than the official nvdiffrec EnvironmentLight.
+   The PBR rendered output (shaded, base_color, metallic, etc.) is significantly
+   dimmer than the official nvdiffrec implementation.
    
-   Comparison (after fixing Issue 6):
+   Comparison (after fixing Issues 6 and 7):
    
-   | Metric        | Fork     | Official |
-   |---------------|----------|----------|
-   | Shaded max    | 0.73     | 1.0      |
-   | Shaded mean   | 0.13     | 0.03*    |
-   | Image mean    | 0.13     | 8.15**   |
+   | Metric          | Fork      | Official  | Ratio    |
+   |-----------------|-----------|-----------|----------|
+   | Shaded mean     | 0.0013    | 0.032     | ~1/24    |
+   | Shaded max      | 0.76      | 1.0       | ~3/4     |
+   | Base_color mean | 0.0013    | 0.13      | ~1/100   |
+   | Base_color max  | 0.56      | 1.0       | ~1/2     |
    
-   * Official uses different tonemapping/gamma
-   ** Image comparison (0-255 range)
+   Key observations:
+   - Mask coverage matches exactly (67266 vs 67280 pixels)
+   - Normals match (mean within 0.1)
+   - Mesh geometry is identical
+   - Voxel attrs are identical after Issue 6 fix
+   - The brightness ratio is ~1/60 for base_color but ~1/24 for shaded
    
-   Both use same:
-   - Mesh geometry (verified)
-   - Voxel attrs (verified after Issue 6 fix)
-   - Environment map (same HDRI file)
-   - Camera parameters
+INVESTIGATION STATUS:
+   - ✓ Verified grid_sample_3d coordinate convention (uses voxel centers at coord+0.5)
+   - ✓ Verified both implementations use same convention (no offset needed)
+   - ✓ Verified mesh.attrs values are identical between fork and official
+   - ✓ Verified diffuse cubemap computed at same resolution (16x16)
+   - ✗ Base_color values after grid_sample_3d are much lower in fork
    
-INVESTIGATION NEEDED:
-   - Compare PBREnvironmentLight.shade() vs nvdiffrec EnvironmentLight
-   - Check diffuse irradiance computation
-   - Check specular split-sum approximation
-   - Verify BSDF LUT values
-
+POSSIBLE CAUSES STILL TO INVESTIGATE:
+   - Different behavior in grid_sample_3d between environments
+   - Mask application differences
+   - Attribute interpolation differences
+   
 LOCATION:
+   - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
    - trellis2/renderers/pbr_envmap.py - PBREnvironmentLight class
-   - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin
+   - flex_gemm/ops/grid_sample/grid_sample.py - grid_sample_3d
 
 ================================================================================
 DISCOVERED ISSUES LOG
@@ -311,7 +317,8 @@ Format: DATE - ISSUE_NUMBER - STATUS_CHANGE
 2026-04-21 - Issue 6 - DISCOVERED: PBR material values differ significantly
 2026-04-21 - Issue 7 - DISCOVERED: Background pixels have garbage values in DRTK interpolate
 2026-04-21 - Issue 8 - FIXED: nvdiffrec dependency removal
-2026-04-21 - Issue 9 - DISCOVERED: PBREnvironmentLight produces dimmer output
+2026-04-21 - Issue 9 - DISCOVERED: PBR rendering produces dimmer output
+2026-04-22 - Issue 9 - IN_PROGRESS: Investigating grid_sample_3d differences
 
 ================================================================================
 FIXED ISSUES LOG

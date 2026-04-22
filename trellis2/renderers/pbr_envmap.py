@@ -534,7 +534,7 @@ class PBREnvironmentLight(torch.nn.Module):
         # Build mipmap chain
         self.specular = build_cubemap_mips(self.base, self.LIGHT_MIN_RES)
         
-        # Compute diffuse irradiance at lowest resolution
+        # Compute diffuse irradiance at lowest resolution (matching nvdiffrec behavior)
         self.diffuse = compute_diffuse_cubemap_vectorized(
             self.specular[-1].data, 
             num_samples=diffuse_samples
