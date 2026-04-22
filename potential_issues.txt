@@ -306,113 +306,79 @@ LOCATION TO INVESTIGATE:
 ISSUE 11: MODEL ORIENTATION INVERTED
 ================================================================================
 
-STATUS: [PENDING] - Needs investigation
+STATUS: [FIXED]
 
 SEVERITY: MEDIUM - Visual issue
 
 DESCRIPTION:
-   The T character model appears inverted (upside-down) in ALL fork PBR output
-   images compared to official. This affects:
+   The T character model appeared inverted (upside-down) in ALL fork PBR output
+   images compared to official. This affected:
    - mask_pbr_00.png
    - normal_pbr_00.png
    - base_color_00.png
    - All other PBR outputs
 
-   This is UNRELATED to Issue 12 (material rendering quality).
+ROOT CAUSE:
+   DRTK uses a different Y pixel coordinate convention than nvdiffrast.
+   nvdiffrast uses OpenGL convention (Y=0 at bottom), DRTK uses image
+   convention (Y=0 at top). This caused the entire image to be Y-flipped.
 
-POSSIBLE CAUSES:
-   - Y-axis flip in DRTK rasterization output
-   - Coordinate system convention difference (OpenGL top-left vs bottom-left origin)
-   - Camera/projection matrix Y-axis handling
+FIX:
+   Changed y_pix calculation in both DRTKContext.rasterize() and
+   DepthPeeler.rasterize_next_layer() to flip the Y coordinate:
+   
+   Before: y_pix = (y_ndc + 1) * 0.5 * h - 0.5
+   After:  y_pix = (h - 1) - ((y_ndc + 1) * 0.5 * h - 0.5)
 
-LOCATION TO INVESTIGATE:
-   - trellis2/utils/drtk_compat.py - DRTKContext.rasterize() Y-axis handling
-   - trellis2/utils/drtk_compat.py - DepthPeeler coordinate system
-   - Pixel coordinate system (Y-up vs Y-down)
+VERIFICATION:
+   - Mask row range now matches: 88-416 (same as official)
+   - Center of mass Y now matches: 223.26 (fork) vs 223.26 (official)
+   - Diff between masks: 0.029 (nearly identical)
 
 ================================================================================
 ISSUE 12: PBR MATERIALS POOR QUALITY (CRITICAL - NEEDS FIX)
 ================================================================================
 
-STATUS: [IN_PROGRESS] - grid_sample_3d sparse voxel sampling issue
+STATUS: [IN_PROGRESS] - Y-flip fixed, investigating grid_sample_3d offset
 
-SEVERITY: CRITICAL - Material rendering broken, must match official exactly
+SEVERITY: CRITICAL - Material rendering produces dim output
 
 DESCRIPTION:
-     The T model is BARELY VISIBLE in PBR material outputs despite correct
-     mask coverage (67266 pixels). THIS IS UNACCEPTABLE - materials must be
-     nearly identical to official nvdiffrast implementation.
-
-     Key measurements:
-     - mask_pbr_00.png: Coverage correct (67266 vs 67280 official) ✓
-     - normal_pbr_00.png: Normal values correct ✓
-     - base_color_00.png: Only 2898/201798 nonzero pixels vs 157150/201840 official ✗
-     - Materials ~60x dimmer than official ✗
+     After fixing Issue 11 (Y-flip), mask and normal images match official,
+     but PBR materials (base_color, metallic, roughness, alpha) remain ~60x dimmer.
+     
+     Key measurements after Issue 11 fix:
+     - Mask: CORRECT (diff: 0.11, nearly identical)
+     - Normal: CORRECT (diff: 0.19, nearly identical)
+     - base_color: mean 0.14 vs official 8.53 (60x dimmer)
+     - shaded: mean 0.15 vs official 8.15 (60x dimmer)
+     - Only 2973/201798 nonzero pixels vs 157150/201840 official
 
 INVESTIGATION COMPLETED:
-     The PBREnvironmentLight.shade() function works CORRECTLY - tested with
-     identical inputs produces identical outputs:
-     - Diffuse convolution matches official
-     - BSDF LUT matches official
-     - shade() function output matches official
+     1. Issue 11 (Y-flip) FIXED - model orientation now correct
+     2. tested +0.5 offset to xyz_voxel - no improvement
+     3. grid_sample_3d works correctly when tested directly
+     4. Voxel attrs match official (verified in Issue 6 fix)
 
-     The issue is NOT in PBREnvironmentLight. The issue is in grid_sample_3d:
-
-     EVIDENCE:
-     1. grid_sample_3d works correctly when tested directly with sparse voxel coords
-        (querying at voxel centers returns correct values)
+POSSIBLE CAUSE:
+     The xyz_voxel values passed to grid_sample_3d may still be offset or
+     the sparse grid structure causes missing corners during interpolation.
      
-     2. When given official's xyz_voxel values, fork's grid_sample_3d produces
-        CORRECT output (verified in Issue 9)
+     Test results show grid_sample_3d expects:
+     - Query at (i, j, k) returns voxel center value (not corner)
+     - Single voxel returns 1.0 for queries in [0, 1) range
      
-     3. Fork's xyz_voxel values differ from official's because DRTK's rasterizer
-        produces different barycentric coordinates at edges
+     Need to investigate why grid_sample_3d returns near-zero values
+     when given the xyz_voxel from the rasterizer.
 
-     4. The sparse voxel grid has ~1.47M voxels, but the mesh surface only
-        passes through SOME of them. When grid_sample_3d queries at a position
-        where the surrounding 8-voxel trilinear cell has MISSING corners, those
-        corners contribute 0 to the interpolation.
-
-ROOT CAUSE ANALYSIS:
-     DRTK's rasterize() produces different triangle IDs at edge pixels than
-     nvdiffrast. This leads to different barycentric weights, which leads to
-     different interpolated vertex positions (xyz). When these xyz positions
-     are converted to voxel coordinates and passed to grid_sample_3d, they
-     land at positions where the sparse grid has fewer filled 8-corner cells.
-     
-     The flex_gemm grid_sample_3d trilinear interpolation returns (weighted sum)
-     where missing corners contribute zero, making the output very dim.
-
-COMPARISON WITH Issue 9:
-     - Issue 9 claimed "RESOLVED - NOT A BUG" based on the logic that different
-       rasterizers produce different results
-     - HOWEVER: The user requires PBR materials to be IDENTICAL to official
-     - The ~60x brightness difference is NOT acceptable
-     - This MUST be fixed even if it requires adjusting how xyz is computed
-
-NEXT STEPS TO FIX:
-     Option A: Fix xyz interpolation to match nvdiffrast more closely
-       - Investigate if there's a Y-axis or other coordinate difference
-       - Check if barycentric coordinate convention is different
-     
-     Option B: Implement sparse-aware grid_sample_3d
-       - Count available corners in trilinear cell
-       - Normalize by number of available corners
-       - This is what nvdiffrast likely does internally
-     
-     Option C: Pre-compute dense voxel grid from sparse representation
-       - Convert sparse voxel grid to dense grid before sampling
-       - More memory but guarantees all 8 corners exist
+NEXT STEPS:
+     1. Compare xyz_voxel values between fork and official
+     2. Check if coords need transformation
+     3. Investigate if Y-flip needs additional adjustment for xyz
 
 LOCATION:
-     - trellis2/renderers/pbr_mesh_renderer.py lines 351-358 (grid_sample_3d call)
+     - trellis2/renderers/pbr_mesh_renderer.py lines 348-358 (grid_sample_3d call)
      - trellis2/utils/drtk_compat.py (interpolate function)
-     - flex_gemm/ops/grid_sample/grid_sample.py (grid_sample_3d implementation)
-
-DEBUG FILES SAVED:
-     - test_output_pbr/debug/*.npy - Fork's debug outputs
-     - test_output_pbr_official/debug/*.npy - Official's debug outputs
-     - compare_pbr.py - Comparison script
 
 ================================================================================
 DISCOVERED ISSUES LOG
