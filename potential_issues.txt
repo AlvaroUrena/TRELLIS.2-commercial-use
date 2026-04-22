@@ -339,46 +339,69 @@ VERIFICATION:
 ISSUE 12: PBR MATERIALS POOR QUALITY (CRITICAL - NEEDS FIX)
 ================================================================================
 
-STATUS: [IN_PROGRESS] - Y-flip fixed, investigating grid_sample_3d offset
+STATUS: [IN_PROGRESS] - DepthPeeler fixed, grid_sample_3d returns zeros
 
 SEVERITY: CRITICAL - Material rendering produces dim output
 
 DESCRIPTION:
-     After fixing Issue 11 (Y-flip), mask and normal images match official,
-     but PBR materials (base_color, metallic, roughness, alpha) remain ~60x dimmer.
+     After fixing Issue 11 (Y-flip) and the DepthPeeler bug, mask and normal 
+     images match official, but PBR materials remain ~60x dimmer.
      
-     Key measurements after Issue 11 fix:
-     - Mask: CORRECT (diff: 0.11, nearly identical)
-     - Normal: CORRECT (diff: 0.19, nearly identical)
+     Key measurements:
+     - Mask: CORRECT (diff: 0.11)
+     - Normal: CORRECT (diff: 0.19)  
      - base_color: mean 0.14 vs official 8.53 (60x dimmer)
-     - shaded: mean 0.15 vs official 8.15 (60x dimmer)
      - Only 2973/201798 nonzero pixels vs 157150/201840 official
 
 INVESTIGATION COMPLETED:
-     1. Issue 11 (Y-flip) FIXED - model orientation now correct
-     2. tested +0.5 offset to xyz_voxel - no improvement
-     3. grid_sample_3d works correctly when tested directly
-     4. Voxel attrs match official (verified in Issue 6 fix)
-
-POSSIBLE CAUSE:
-     The xyz_voxel values passed to grid_sample_3d may still be offset or
-     the sparse grid structure causes missing corners during interpolation.
+     1. Issue 11 (Y-flip) FIXED - model orientation correct
+     2. Issue 13 (DepthPeeler index_img) FIXED - triangle IDs preserved
+     3. xyz_voxel ranges now match mesh.coords:
+        - xyz_voxel X: [0, 512], coords col0: [0, 511]
+        - xyz_voxel Y: [159, 355], coords col1: [158, 355]
+        - xyz_voxel Z: [27, 494], coords col2: [27, 493]
+     4. grid_sample_3d returns ALL ZEROS even for valid in-bounds queries!
      
-     Test results show grid_sample_3d expects:
-     - Query at (i, j, k) returns voxel center value (not corner)
-     - Single voxel returns 1.0 for queries in [0, 1) range
+NEW ROOT CAUSE DISCOVERED:
+     grid_sample_3d from flex_gemm returns zero for all queries despite:
+     - xyz_voxel being in the correct range
+     - mesh.coords covering the query positions
+     - mesh.attrs having non-zero values
      
-     Need to investigate why grid_sample_3d returns near-zero values
-     when given the xyz_voxel from the rasterizer.
-
-NEXT STEPS:
-     1. Compare xyz_voxel values between fork and official
-     2. Check if coords need transformation
-     3. Investigate if Y-flip needs additional adjustment for xyz
+     This suggests either:
+     - grid_sample_3d has a bug in sparse grid handling
+     - The coordinate system is different than expected
+     - There's a mismatch between fork and official flex_gemm versions
+     - The torch.cat([zeros, coords], dim=-1) padding is wrong
 
 LOCATION:
-     - trellis2/renderers/pbr_mesh_renderer.py lines 348-358 (grid_sample_3d call)
-     - trellis2/utils/drtk_compat.py (interpolate function)
+     - trellis2/renderers/pbr_mesh_renderer.py lines 351-357 (grid_sample_3d call)
+     - flex_gemm.ops.grid_sample.grid_sample_3d function
+
+================================================================================
+ISSUE 13: DEPTH PEELER INDEX_IMG FILTERING BUG (FIXED)
+================================================================================
+
+STATUS: [FIXED]
+
+DESCRIPTION:
+     DepthPeeler.rasterize_next_layer() was using filtered index_img for 
+     building rast[..., 3], causing all geometry pixels to have triangle ID = -1
+     on layers > 0. This broke attribute interpolation.
+     
+FIX:
+     Save original index_img from drtk.rasterize() BEFORE depth peeling 
+     filtering, and use it for rast[..., 3].
+
+     Also fixed interpolate() to always reconstruct index_img from rast[..., 3]
+     rather than using the potentially-filtered peeler cache.
+
+LOCATION:
+     - trellis2/utils/drtk_compat.py lines 478-524 (DepthPeeler.rasterize_next_layer)
+
+VERIFICATION:
+     - index_img now has valid values (max 3137408) on all layers
+     - xyz interpolation returns non-zero values for geometry pixels
 
 ================================================================================
 DISCOVERED ISSUES LOG

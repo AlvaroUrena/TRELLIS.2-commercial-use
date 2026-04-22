@@ -347,12 +347,12 @@ class PbrMeshRenderer:
                         from flex_gemm.ops.grid_sample import grid_sample_3d
                     mask = rast[..., -1:] > 0
                     xyz = interpolate(vertices_orig, rast, faces, peeler=peeler)[0]
-                    xyz = ((xyz - mesh.origin) / mesh.voxel_size).reshape(1, -1, 3)
+                    xyz_voxel = ((xyz - mesh.origin.to(xyz.device)) / mesh.voxel_size).reshape(1, -1, 3)
                     img = grid_sample_3d(
                         mesh.attrs,
                         torch.cat([torch.zeros_like(mesh.coords[..., :1]), mesh.coords], dim=-1),
                         mesh.voxel_shape,
-                        xyz,
+                        xyz_voxel,
                         mode='trilinear'
                     )
                     img = img.reshape(1, resolution * ssaa, resolution * ssaa, mesh.attrs.shape[-1]) * mask
