@@ -106,6 +106,8 @@ for i, (extr, intr) in enumerate(zip(extrinsics, intrinsics)):
     save_image(result.roughness, "roughness")
     save_image(result.alpha, "alpha")
     save_image(result.mask, "mask_pbr")
+    if hasattr(result, 'clay'):
+        save_image(result.clay, "clay")
     
     print(f"  View {i}: PBR rendered")
     print(f"    shaded: {result.shaded.min().item():.4f} - {result.shaded.max().item():.4f}")

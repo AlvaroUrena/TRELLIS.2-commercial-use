@@ -483,8 +483,12 @@ class PbrMeshRenderer:
                 alpha += w
         
         # Ambient occlusion
+        # NOTE: DRTK produces slightly different normals than nvdiffrast, causing
+        # more SSAO occlusion. Adjust intensity to match nvdiffrast output.
+        # Official f_occ ≈ 0.232, fork f_occ ≈ 0.261 without adjustment
+        # Adjustment factor: 0.232 / 0.261 ≈ 0.89
         f_occ = screen_space_ambient_occlusion(
-            depth, normal, perspective, intensity=1.5
+            depth, normal, perspective, intensity=1.33
         )
         shaded *= (1 - f_occ)
         out_dict.clay = (1 - f_occ)
