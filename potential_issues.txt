@@ -506,75 +506,51 @@ VERIFICATION:
  CRITICAL FINDINGS FOR ISSUE 14 (2026-04-23 Updated)
  ================================================================================
 
- ## Status: FINAL - 89% brightness achieved, DRTK rasterization differences are inherent
+  ## Status: COMPLETE - Brightness matches within ~5% tolerance
 
- ## Summary
- All cube coordinate conventions fixed. Remaining ~11% brightness difference is 
- inherent to DRTK vs nvdiffrast rasterization algorithms (different edge handling,
- barycentric interpolation, z-fighting resolution). This is ACCEPTABLE.
+  ## Summary
+  All PBR shading issues fixed. Brightness ratio: 1.03-1.05 (was 0.89).
 
- ## Current State
- - Brightness ratio: 0.89-0.90 (stable after all fixes)
- - SSAO occlusion: fork 0.215 vs official 0.225 (ratio 0.96)
- - Pre-SSAO shading: 0.89 of official (due to normal differences)
- - Materials match exactly (base_color, metallic, roughness, alpha)
-  
- ## Fixes Applied in This Session
- 1. **cube_to_dir convention fix** - FIXED (pbr_mesh_renderer.py, pbr_envmap.py)
-    - Face convention now matches nvdiffrast: 0=+X, 1=-X, 2=+Z, 3=-Z, 4=+Y, 5=-Y
-    - Corrected coordinate mappings for all 6 faces
-    
- 2. **dir_to_cube_face_and_uv fix** - FIXED (pbr_envmap.py)
-    - Proper inverse of cube_to_dir
-    - Corrected UV coordinate calculations
-    - Roundtrip test passes: cube_to_dir ⇔ dir_to_cube_face_and_uv
+  ## Current State
+  - Brightness ratio: 1.03-1.05 (target: ~1.0)
+  - Pre-SSAO ratio: 1.01 (target: ~1.0)
+  - SSAO occlusion: fork 0.215 vs official 0.225 (ratio 0.96)
+  - Materials match exactly (base_color, metallic, roughness, alpha)
+   
+  ## Fixes Applied
+  1. **cube_to_dir convention fix** - FIXED (pbr_mesh_renderer.py, pbr_envmap.py)
+     - Face convention now matches nvdiffrast: 0=+X, 1=-X, 2=+Z, 3=-Z, 4=+Y, 5=-Y
+     - Corrected coordinate mappings for all 6 faces
+     
+  2. **dir_to_cube_face_and_uv fix** - FIXED (pbr_envmap.py)
+     - Proper inverse of cube_to_dir
+     - Corrected UV coordinate calculations
+     - Roundtrip test passes: cube_to_dir ⇔ dir_to_cube_face_and_uv
 
- ## Previous Fixes (from earlier sessions)
- 3. **SSAO intensity** - FIXED (ssao: intensity=1.33)
-    - DRTK normals differ from nvdiffrast due to edge handling
-    - Adjusted intensity from 1.5 to 1.33
+  3. **SSAO intensity** - FIXED (pbr_mesh_renderer.py)
+     - DRTK normals differ from nvdiffrast due to edge handling
+     - Adjusted intensity from 1.5 to 1.33
 
- ## Root Cause of Remaining ~11% Difference
+  4. **Specular roughness blend** - FIXED (pbr_envmap.py)
+     - Missing: `spec = torch.lerp(spec, diffuse, roughness)`
+     - This line blends specular toward diffuse for rough surfaces
+     - Critical PBR behavior - rough surfaces appear more diffuse
+     - Brightness improved from 89% to ~103%
 
- The ~11% pre-SSAO darkness is caused by DRTK vs nvdiffrast rasterization differences:
- 
- ```
- Normal comparison (camera space):
-   Mean angle difference: 6.39° (91.6% within 10°)
-   This affects:
-   - Diffuse irradiance (cubemap sampling based on normal direction)
-   - Specular reflection (reflection direction based on normal)
-   - NdotV in FG LUT lookup
- ```
+  ===================================================================================
+  CRITICAL FIXES APPLIED IN ISSUE 14 (Chronological)
+  ================================================================================
 
- Different rasterizers produce slightly different normals due to:
- - Edge handling algorithms (different z-fighting resolution)
- - Barycentric interpolation at triangle edges
- - Numerical precision differences
-
- ## Acceptance Criteria Met
- - Materials: ✓ Exact match
- - Mask: ✓ Match
- - Normal: ✓ Within rasterization tolerance (6.39° mean)
- - Brightness: 89% (acceptable for different rasterizers)
-
- ## Next Steps for Future Work
- If further improvement is desired:
- 1. Add debug output to PBREnvironmentLight.shade() to compare with nvdiffrec
- 2. Try normal renormalization: F.normalize(gb_normal, dim=-1) after interpolate()
- 3. Compare FG LUT values and NdotV calculations in detail
- 4. Proceed to PHASE 7: GLB Export Verification
-
- ================================================================================
- CRITICAL FIXES APPLIED IN ISSUE 14 (Chronological)
- ================================================================================
-
- 2026-04-22: Fixed sample_cubemap_mip() - per-pixel mip level sampling
- 2026-04-22: Fixed Y-flip in rasterize() - model orientation
- 2026-04-22: Fixed grid_sample_3d contiguous memory
- 2026-04-23: Fixed SSAO intensity - reduced from 1.5 to 1.33
+  2026-04-22: Fixed sample_cubemap_mip() - per-pixel mip level sampling
+  2026-04-22: Fixed Y-flip in rasterize() - model orientation
+  2026-04-22: Fixed grid_sample_3d contiguous memory
+  2026-04-23: Fixed SSAO intensity - reduced from 1.5 to 1.33
   2026-04-23: Fixed cube_to_dir convention - matched nvdiffrast
- 2026-04-23: Fixed dir_to_cube_face_and_uv - proper inverse of cube_to_dir
+  2026-04-23: Fixed dir_to_cube_face_and_uv - proper inverse of cube_to_dir
+  2026-04-23: Fixed specular roughness blend - added spec lerp with diffuse
+     - Root cause: Missing `spec = torch.lerp(spec, diffuse, roughness)` in shade()
+     - Impact: Brightness improved from 89% to ~103%
+     - This PBR behavior blends specular toward diffuse for rough surfaces
 
  ================================================================================
  CRITICAL FINDINGS FOR ISSUE 12 (2026-04-22 Updated)

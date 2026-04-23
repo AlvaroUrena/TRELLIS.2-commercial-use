@@ -168,122 +168,83 @@ RESULTS:
   NOTE: Exact pixel differences at edges are expected due to different
   rasterization algorithms handling z-fighting and edge sampling differently.
 
-   ================================================================================
-   PHASE 6: PBR RENDERER VERIFICATION
-   ================================================================================
-   
-   STATUS: IN_PROGRESS - 89% matched, 11% remaining from rasterization differences
-   
-   CONTEXT:
-      After MeshRenderer is verified, test PbrMeshRenderer which uses:
-      - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
-      - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
-      - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
-      - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
+    ================================================================================
+    PHASE 6: PBR RENDERER VERIFICATION
+    ================================================================================
+    
+    STATUS: COMPLETE - Brightness matches within ~5% tolerance
+    
+    CONTEXT:
+       After MeshRenderer is verified, test PbrMeshRenderer which uses:
+       - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
+       - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
+       - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
+       - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
 
-   NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
-         is only used for MeshWithPbrMaterial (UV-textured meshes), which is
-         different from the voxel-based pipeline tested here.
+    NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
+          is only used for MeshWithPbrMaterial (UV-textured meshes), which is
+          different from the voxel-based pipeline tested here.
 
-   FILES TO CHECK:
-      - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
-      - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
-      - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
-      - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
+    FILES TO CHECK:
+       - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
+       - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
+       - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
+       - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
 
-   KEY COMPONENTS VERIFIED:
-       1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
-          - Now preserves original triangle IDs in rast[..., 3]
-          - interpolate() now correctly reconstructs index_img from rast
-   
-       2. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
-          - Root cause: Non-contiguous memory layout after reshape
-          - Fix: Added .contiguous() after reshape of xyz_voxel
-          - All PBR material channels now match official exactly
-   
-       3. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14 partial)
-          - Root cause: Used global minimum mip level for ALL pixels
-          - Fix: Per-pixel mip level sampling with proper interpolation
-   
-       4. cube_to_dir() [Pure PyTorch]: ✓ FIXED (Issue 14)
-          - Root cause: Coordinate convention mismatch
-          - Fix: Corrected to match nvdiffrast convention (Face 0=+X, 1=-X, 2=+Z, 3=-Z, 4=+Y, 5=-Y)
-          - Also fixed dir_to_cube_face_and_uv() to be proper inverse
-          - Lighting direction now matches nvdiffrast
+    KEY COMPONENTS VERIFIED:
+        1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
+           - Now preserves original triangle IDs in rast[..., 3]
+           - interpolate() now correctly reconstructs index_img from rast
+    
+        2. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
+           - Root cause: Non-contiguous memory layout after reshape
+           - Fix: Added .contiguous() after reshape of xyz_voxel
+           - All PBR material channels now match official exactly
+    
+        3. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14 partial)
+           - Root cause: Used global minimum mip level for ALL pixels
+           - Fix: Per-pixel mip level sampling with proper interpolation
+    
+        4. cube_to_dir() [Pure PyTorch]: ✓ FIXED (Issue 14)
+           - Root cause: Coordinate convention mismatch
+           - Fix: Corrected to match nvdiffrast convention (Face 0=+X, 1=-X, 2=+Z, 3=-Z, 4=+Y, 5=-Y)
+           - Also fixed dir_to_cube_face_and_uv() to be proper inverse
+           - Lighting direction now matches nvdiffrast
 
-       5. SSAO intensity [Pure PyTorch]: ✓ FIXED (Issue 14)
-          - Root cause: DRTK normals differ from nvdiffrast due to edge handling
-          - Fix: Reduced intensity from 1.5 to 1.33
-          - SSAO occlusion now matches
+        5. SSAO intensity [Pure PyTorch]: ✓ FIXED (Issue 14)
+           - Root cause: DRTK normals differ from nvdiffrast due to edge handling
+           - Fix: Reduced intensity from 1.5 to 1.33
+           - SSAO occlusion now matches
 
-   REMAINING ISSUE (~11% pre-SSAO darkness):
-       ROOT CAUSE: DRTK vs nvdiffrast rasterization differences
-       
-       DRTK and nvdiffrast use different rasterization algorithms causing:
-       - Different edge handling (z-fighting resolution)
-       - Different barycentric interpolation at triangle edges
-       - Normals differ by ~6° mean angle (91.6% within 10°)
-       
-       This affects PBR shading:
-       - Diffuse irradiance from cubemap sampling (direction based on normal)
-       - Specular prefilter sampling (reflection direction based on normal)
-       - FG LUT lookup (NdotV depends on normal-view dot product)
-       
-       INVESTIGATION NEEDED:
-       1. Compare shade() function outputs between fork and official:
-          - Diffuse irradiance lookup values
-          - Specular prefilter lookup values
-          - FG LUT result and NdotV values
-          
-       2. Check if the ~11% is uniformly distributed or concentrated:
-          - Check per-channel brightness ratios
-          - Check spatial distribution of darkness
-          - Check if metallic vs non-metallic areas differ
-          
-       3. Consider normal renormalization after interpolation:
-          - Interpolated normals may not be perfectly normalized
-          - Try F.normalize(gb_normal, dim=-1) after interpolate()
-          
-       4. Check if the PBR shading formula matches exactly:
-          - diff = kd * irradiance * (1 - metallic)
-          - spec = ks * prefilter * FG(NdotV, roughness)
-          - reflectance = ks * FG_x + FG_y (split-sum approximation)
+        6. Specular roughness blend [Pure PyTorch]: ✓ FIXED (Issue 14)
+           - Root cause: Missing `spec = torch.lerp(spec, diffuse, roughness)` in shade()
+           - This line blends specular toward diffuse for rough surfaces
+           - Fix: Added the lerp operation to match nvdiffrec behavior
+           - Brightness now matches within ~5% tolerance
 
-   CURRENT METRICS (after all fixes):
-       - Base color mean: 8.527 (official: 8.534) - matches!
-       - Metallic mean: 60.762 (official: 60.779) - matches!
-       - Roughness mean: 13.545 (official: 13.543) - matches!
-       - Alpha mean: 45.339 (official: 45.363) - matches!
-       - Normal mean diff: 0.1949 - expected from edge handling
-       - SSAO f_occ: 0.215 (fork) vs 0.225 (official) - ratio 0.96
-       
-       SHADED OUTPUT ANALYSIS:
-       - Fork luminance: 0.107, Official: 0.119
-       - Brightness ratio: 0.89-0.90
-       - Pre-SSAO shading ratio: 0.89
-       - Per-channel: R=0.93, G=0.88, B=0.93
+    FINAL METRICS:
+        - Brightness ratio: 1.03-1.05 (target: ~1.0)
+        - Pre-SSAO ratio: 1.01 (target: ~1.0)
+        - SSAO f_occ: 0.96-1.01 ratio (matches)
+        - Materials: Exact match
+        - Normal angle difference: 6.39° mean (acceptable for different rasterizers)
+        - Base color mean: 8.527 (official: 8.534) - matches!
+        - Metallic mean: 60.762 (official: 60.779) - matches!
+        - Roughness mean: 13.545 (official: 13.543) - matches!
+        - Alpha mean: 45.339 (official: 45.363) - matches!
 
-   ACCEPTANCE CRITERIA:
-       - Materials match exactly ✓
-       - Mask coverage matches ✓
-       - Normal direction matches within rasterization tolerance ✓
-       - Final brightness ratio: 0.89 (target: 1.0)
-       - The ~11% difference is ACCEPTABLE for different rasterizers
+    ACCEPTANCE CRITERIA MET:
+        - Materials match exactly ✓
+        - Mask coverage matches ✓
+        - Normal direction matches within rasterization tolerance ✓
+        - Final brightness ratio: 1.03-1.05 (within tolerance of 1.0) ✓
 
-   TEST SCRIPTS CREATED:
-       - compare_pbr.py - Compare PBR output brightness
-       - check_shading_v2.py - Detailed pre-SSAO analysis
-       - investigate_normals.py - Normal angle comparison
-       - analyze_pbr_shading.py - Component analysis
-       - test_cube_uv_consistency.py - Verify cubemap roundtrip
-
-   NEXT STEPS FOR NEXT AGENT:
-       1. If 89% is acceptable, mark Phase 6 as COMPLETE
-       2. If further improvement needed, investigate:
-          - Add debug output to PBREnvironmentLight.shade() to compare with nvdiffrec
-          - Try normal renormalization: gb_normal = F.normalize(gb_normal, dim=-1)
-          - Compare FG LUT values and NdotV calculations
-       3. Proceed to PHASE 7: GLB Export Verification
+    TEST SCRIPTS CREATED:
+        - compare_pbr.py - Compare PBR output brightness
+        - check_shading_v2.py - Detailed pre-SSAO analysis
+        - debug_shade_components.py - Component analysis for shade() debugging
+        - analyze_pbr_shading.py - Component analysis
+        - test_cube_uv_consistency.py - Verify cubemap roundtrip
 
    TEST VERIFICATION:
        - Run: TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py
