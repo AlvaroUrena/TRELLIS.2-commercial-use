@@ -198,6 +198,15 @@ def to_glb(
     mesh.compute_vertex_normals()
     out_normals = mesh.read_vertex_normals()[out_vmaps]
     
+    # Fix zero-length normals (can occur with degenerate geometry)
+    # glTF 2.0 requires all normals to be unit vectors
+    normal_lengths = torch.linalg.norm(out_normals, dim=-1, keepdim=True)
+    zero_mask = normal_lengths < 1e-6
+    if zero_mask.any():
+        import torch.nn.functional as F
+        out_normals = torch.where(zero_mask, F.normalize(out_vertices, dim=-1), out_normals)
+    out_normals = torch.nn.functional.normalize(out_normals, dim=-1)
+    
     if use_tqdm:
         pbar.update(1)
     if verbose:
