@@ -377,46 +377,69 @@ VERIFICATION:
  ISSUE 14: SHADED IMAGE QUALITY DIFFERS FROM OFFICIAL
  ================================================================================
  
- STATUS: [FIXED] - cube_to_dir coordinate mapping corrected
+ STATUS: [PARTIALLY FIXED] - Lighting direction fixed, but brightness differs
  
- SEVERITY: HIGH - Fork shaded output appeared with inverted lighting
+ SEVERITY: MEDIUM - Fork output is ~85% brightness of official
  
  DESCRIPTION:
-      All PBR material channels (base_color, metallic, roughness, alpha) matched
-      official perfectly, but the final shaded image showed inverted lighting
-      (light side at bottom instead of top).
+      After fixing cube_to_dir, the lighting direction is now correct (light side
+      appears at top in both). However, the shaded output is still ~15% darker
+      than official.
       
- ROOT CAUSE:
-      The cube_to_dir function in pbr_envmap.py and pbr_mesh_renderer.py had
-      incorrect coordinate mappings that didn't match nvdiffrec's convention.
+ CURRENT METRICS:
+      - Fork luminance mean: 25.67
+      - Official luminance mean: 30.08
+      - Brightness ratio: 0.853 (fork is ~15% darker)
+      - Per-channel ratio: R=0.878, G=0.833, B=0.889
       
-      nvdiffrec convention:
-      - Face 0 (+X): (rx, ry, rz) = (1, -y, -x)  
-      - Face 1 (-X): (rx, ry, rz) = (-1, -y, x)
-      - Face 2 (+Y): (rx, ry, rz) = (x, 1, y)
-      - Face 3 (-Y): (rx, ry, rz) = (x, -1, -y)
-      - Face 4 (+Z): (rx, ry, rz) = (x, -y, 1)
-      - Face 5 (-Z): (rx, ry, rz) = (-x, -y, -1)
+ ROOT CAUSE FIXED:
+      The cube_to_dir function had incorrect coordinate mappings causing inverted
+      lighting (light side at bottom instead of top). This is now fixed.
       
-      Fork had Y and Z coordinates swapped in multiple faces.
-      
- FIX:
-      Corrected cube_to_dir in both files to match nvdiffrec's convention.
-      Also fixed dir_to_cube_face_and_uv() to properly invert the mappings.
-      
- VERIFICATION:
-      - Bright spots now appear in upper region (same as official)
-      - Fork bright centroid: y=169.7, Official: y=161.7 (both in upper half)
-      - Brightness distribution matches: top-heavier for both
-      
-      Material channels all match:
-      - base_color: diff mean=0.1097
-      - metallic: diff mean=0.1594
-      - roughness: diff mean=0.1363
-      - alpha: diff mean=0.2174
-      - normal: diff mean=0.1949 (excellent match)
+ REMAINING ISSUES TO INVESTIGATE:
+ 
+      1. SSAO DEPTH CONVENTION (LIKELY CAUSE):
+         - DRTK uses camera-space z (~10) vs nvdiffrast z/w (~0.82)
+         - SSAO radius=0.1 samples 12x smaller relative area in fork
+         - This causes MORE occlusion, making image darker
+         - FIX: Scale SSAO radius by depth ratio (~10/0.82 ≈ 12.2)
+         
+      2. SPECULAR PREFILTER ACCURACY:
+         - compute_specular_prefilter_vectorized() may have errors
+         - Compare specular highlight intensity vs official
+         - GGX importance sampling accuracy
+         
+      3. DIFFUSE PREFILTER ACCURACY:
+         - compute_diffuse_cubemap_vectorized() may have errors
+         - Cosine-weighted hemisphere sampling
+         - Integration accuracy at low resolution (16x16)
+         
+      4. SHADE() FUNCTION:
+         - Verify FG LUT sampling coordinates
+         - Check NdotV clamping
+         - Verify specular/diffuse balance
 
- FILES MODIFIED:
+ INVESTIGATION STEPS FOR NEXT AGENT:
+      1. Test with SSAO disabled to isolate shading vs occlusion
+         - If disabled SSAO matches better, it's SSAO depth scaling
+      2. Add SSAO radius scaling for DRTK depth:
+         - radius = 0.1 * (camera_z_mean / ndc_z_mean) ≈ 0.1 * 12.2
+      3. Compare diffuse irradiance values at specific directions
+      4. Compare specular prefilter values at specific roughness levels
+      5. Save and compare intermediate values:
+         - diffuse lookup after shade()
+         - specular lookup after shade()
+         - FG lookup values
+         - NdotV distribution
+
+ FILES TO INVESTIGATE:
+      - trellis2/renderers/pbr_mesh_renderer.py line 486-487 (SSAO call)
+      - trellis2/renderers/pbr_envmap.py:
+        * compute_diffuse_cubemap_vectorized() - diffuse prefilter
+        * compute_specular_prefilter_vectorized() - specular prefilter
+        * shade() - main shading function
+
+ FILES MODIFIED (LIGHTING FIX):
       - trellis2/renderers/pbr_envmap.py - cube_to_dir() and dir_to_cube_face_and_uv()
       - trellis2/renderers/pbr_mesh_renderer.py - cube_to_dir()
 
@@ -470,7 +493,50 @@ VERIFICATION:
  2026-04-22 - Issue 14 - INVESTIGATION: sample_cubemap_mip bug (global mip level)
  2026-04-22 - Issue 14 - FIXED: Per-pixel mip level sampling
  2026-04-22 - Issue 14 - REOPENED: User reports visual quality difference
- 2026-04-22 - Issue 14 - IN_PROGRESS: Investigating shading pipeline
+ 2026-04-22 - Issue 14 - INVESTIGATION: Lighting appears inverted
+ 2026-04-22 - Issue 14 - ROOT CAUSE: cube_to_dir had Y/Z coordinates swapped
+ 2026-04-22 - Issue 14 - FIXED: Corrected cube_to_dir mapping
+ 2026-04-22 - Issue 14 - REMAINING: ~15% darker output, likely SSAO depth scaling
+ 
+ ================================================================================
+ CRITICAL FINDINGS FOR ISSUE 14 (2026-04-22 Updated)
+ ================================================================================
+ 
+ ## Status: PARTIALLY FIXED
+ 
+ ### Root Cause FIXED
+ The cube_to_dir function had incorrect coordinate mappings causing inverted lighting.
+ Y and Z coordinates were swapped in multiple face projections.
+ 
+ ### Fix Applied
+ Corrected cube_to_dir() in pbr_envmap.py and pbr_mesh_renderer.py to match nvdiffrec:
+ - Face 0 (+X): (rx, ry, rz) = (1, -y, -x) instead of (1, -x, -y)
+ - Face 1 (-X): (rx, ry, rz) = (-1, -y, x) instead of (-1, x, -y)
+ - etc.
+ 
+ Also fixed dir_to_cube_face_and_uv() to properly invert the mappings.
+ 
+ ### Verification
+ - Lighting direction now matches: bright spots in upper region
+ - Material channels all match exactly
+ - Brightness ratio: 0.853 (fork is ~15% darker)
+ 
+ ### Remaining Issue (NEEDS NEXT AGENT)
+ Fork output is ~15% darker than official. Likely causes:
+ 
+ 1. **SSAO DEPTH SCALING** (MOST LIKELY):
+    - DRTK uses camera-space z (~10.0)
+    - nvdiffrast uses normalized z/w (~0.82)
+    - SSAO radius=0.1 samples 12x larger relative area in nvdiffrast
+    - FIX: Scale SSAO radius by (10.0/0.82) ≈ 12.2
+    
+ 2. Specular/diffuse prefilter may have accuracy differences
+ 3. FG LUT coordinates may need adjustment
+ 
+ ### Recommended Next Steps
+ 1. Disable SSAO and test - if brightness matches, SSAO is cause
+ 2. Scale SSAO radius for DRTK camera-space depth
+ 3. Compare intermediate diffuse/specular values with official
 
  ================================================================================
  CRITICAL FINDINGS FOR ISSUE 12 (2026-04-22 Updated)

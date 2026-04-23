@@ -168,97 +168,101 @@ RESULTS:
   NOTE: Exact pixel differences at edges are expected due to different
   rasterization algorithms handling z-fighting and edge sampling differently.
 
- ================================================================================
- PHASE 6: PBR RENDERER VERIFICATION
- ================================================================================
- 
- STATUS: IN_PROGRESS - Investigating shaded output quality
- 
- CONTEXT:
-    After MeshRenderer is verified, test PbrMeshRenderer which uses:
-    - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
-    - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
-    - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
-    - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
+  ================================================================================
+  PHASE 6: PBR RENDERER VERIFICATION
+  ================================================================================
+  
+  STATUS: IN_PROGRESS - Lighting fixed, brightness difference remains
+  
+  CONTEXT:
+     After MeshRenderer is verified, test PbrMeshRenderer which uses:
+     - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
+     - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
+     - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
+     - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
 
- NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
-       is only used for MeshWithPbrMaterial (UV-textured meshes), which is
-       different from the voxel-based pipeline tested here.
+  NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
+        is only used for MeshWithPbrMaterial (UV-textured meshes), which is
+        different from the voxel-based pipeline tested here.
 
- FILES TO CHECK:
-    - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
-    - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
-    - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
-    - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
+  FILES TO CHECK:
+     - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
+     - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
+     - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
+     - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
 
- KEY COMPONENTS VERIFIED:
-     1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
-        - Now preserves original triangle IDs in rast[..., 3]
-        - interpolate() now correctly reconstructs index_img from rast
- 
-     2. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
-        - Root cause: Non-contiguous memory layout after reshape
-        - Fix: Added .contiguous() after reshape of xyz_voxel
-        - All PBR material channels now match official exactly
- 
-     3. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14 partial)
-        - Root cause: Used global minimum mip level for ALL pixels
-        - Fix: Per-pixel mip level sampling with proper interpolation
-        - Need to verify specular highlights are correct
- 
- COMPONENTS NEEDING INVESTIGATION:
-     4. sample_cubemap() - Cube face selection and UV mapping
-        - dir_to_cube_face_and_uv() may have coordinate issues
-        - Face selection logic may differ from nvdiffrec
-        
-     5. compute_diffuse_cubemap_vectorized()
-        - Cosine-weighted hemisphere sampling
-        - Tangent frame construction
-        - Integration accuracy
-        
-     6. compute_specular_prefilter_vectorized()
-        - GGX importance sampling correctness
-        - Roughness -> mip level mapping
-        - Prefilter quality
-        
-     7. PBREnvironmentLight.shade()
-        - Verify diffuse lookup is correct
-        - Verify specular lookup is correct
-        - Verify FG LUT lookup coordinates
-        
-     8. screen_space_ambient_occlusion()
-        - Depth convention for DRTK (camera-space z)
-        - View-space position computation
-        - Occlusion calculation
+  KEY COMPONENTS VERIFIED:
+      1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
+         - Now preserves original triangle IDs in rast[..., 3]
+         - interpolate() now correctly reconstructs index_img from rast
+  
+      2. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
+         - Root cause: Non-contiguous memory layout after reshape
+         - Fix: Added .contiguous() after reshape of xyz_voxel
+         - All PBR material channels now match official exactly
+  
+      3. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14 partial)
+         - Root cause: Used global minimum mip level for ALL pixels
+         - Fix: Per-pixel mip level sampling with proper interpolation
+  
+      4. cube_to_dir() [Pure PyTorch]: ✓ FIXED (Issue 14)
+         - Root cause: Y and Z coordinates swapped in face mapping
+         - Fix: Corrected to match nvdiffrec's coordinate convention
+         - Lighting direction now matches (bright spots in upper region)
 
- VERIFICATION METRICS:
-     - Base color mean: 8.527 (official: 8.534) - matches!
-     - Metallic mean: 60.762 (official: 60.779) - matches!
-     - Roughness mean: 13.545 (official: 13.543) - matches!
-     - Alpha mean: 45.339 (official: 45.363) - matches!
-     - Shaded brightness ratio: 1.026 (material channels match, but visual quality differs)
-     - Diff where both have geometry: mean=0.1019 on 0-1 scale
-     - Max diff: 247/255 (nearly 1.0) - indicates significant local differences!
+  REMAINING ISSUES TO INVESTIGATE:
+      5. SSAO DEPTH SCALING (LIKELY CAUSE OF ~15% DARKNESS):
+         - DRTK uses camera-space z (~10), nvdiffrast uses z/w (~0.82)
+         - SSAO radius=0.1 samples different relative areas
+         - FIX NEEDED: Scale SSAO radius by depth ratio
 
- INVESTIGATION PLAN:
-     1. Add debug output to save intermediate tensors:
-        - After diffuse lookup
-        - After specular lookup
-        - After FG lookup
-        - NdotV, roughness per pixel
-     2. Compare pixel values in specific regions:
-        - Bright specular highlights
-        - Dark/shadowed areas
-        - Edge regions
-     3. Test with SSAO disabled
-     4. Test with specular disabled (diffuse-only)
-     5. Compare sample_cubemap output vs nvdiffrec dr.texture
-     6. Check cubemap face convention matches
+      6. compute_diffuse_cubemap_vectorized()
+         - Cosine-weighted hemisphere sampling
+         - Integration accuracy at 16x16 resolution
+         - Compare irradiance values vs nvdiffrec's diffuse_cubemap()
+         
+      7. compute_specular_prefilter_vectorized()
+         - GGX importance sampling correctness
+         - Roughness -> mip level mapping
+         - Compare prefilter values vs nvdiffrec's specular_cubemap()
 
- TEST VERIFICATION:
-     - Run: TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py
-     - Compare: python compare_pbr.py
-     - Visual inspection: compare fork vs official shaded images side-by-side
+  CURRENT METRICS (after cube_to_dir fix):
+      - Base color mean: 8.527 (official: 8.534) - matches!
+      - Metallic mean: 60.762 (official: 60.779) - matches!
+      - Roughness mean: 13.545 (official: 13.543) - matches!
+      - Alpha mean: 45.339 (official: 45.363) - matches!
+      - Normal mean diff: 0.1949 - excellent match!
+      - Material channels all match exactly
+      
+      SHADED OUTPUT DIFFERENCE:
+      - Fork luminance: 25.67, Official: 30.08
+      - Brightness ratio: 0.853 (fork is ~15% darker)
+      - Per-channel ratio: R=0.878, G=0.833, B=0.889
+      - Lighting direction NOW CORRECT (bright spots in upper region)
+
+  INVESTIGATION PLAN FOR NEXT AGENT:
+      1. TEST WITH SSAO DISABLED:
+         - Create test_pbr_nossao.py that disables SSAO
+         - Compare brightness - if matches, SSAO is the cause
+         
+      2. FIX SSAO DEPTH SCALING:
+         - Scale radius by camera_z / ndc_z ≈ 10 / 0.82 ≈ 12.2
+         - Or: radius = 0.1 * (vertices_camera[..., 2:3].mean() / 0.82)
+         - Test: TRELLIS_DEBUG=1 python test_render_pbr.py
+         
+      3. COMPARE INTERMEDIATE VALUES:
+         - Save diffuse irradiance from PBREnvironmentLight.shade()
+         - Save specular prefilter values
+         - Compare with official's EnvironmentLight output
+         
+      4. VERIFY CUBEMAP CONVERSION:
+         - compare latlong_to_cubemap output vs official
+         - Check if environment cubemap has correct orientation
+
+  TEST VERIFICATION:
+      - Run: TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py
+      - Compare: python compare_pbr.py
+      - Visual check: bright spots should now be at top (same as official)
 
 ================================================================================
 PHASE 7: GLB EXPORT VERIFICATION
