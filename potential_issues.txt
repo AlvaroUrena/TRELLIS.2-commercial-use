@@ -377,50 +377,102 @@ VERIFICATION:
  ISSUE 14: SHADED IMAGE QUALITY DIFFERS FROM OFFICIAL
  ================================================================================
  
- STATUS: [FIXED] - ~89% brightness match achieved
+ STATUS: [IN_PROGRESS] - 89% brightness achieved, 11% remaining darkness
  
  SEVERITY: MEDIUM - Fork output is ~89% brightness of official (was ~85%)
- 
+  
  DESCRIPTION:
-      After fixing cube_to_dir, the lighting direction is correct (light side
-      appears at top in both). The brightness difference is now managed.
+      After fixing cube_to_dir and SSAO intensity, brightness improved from 85% to 89%.
+      The remaining ~11% darkness is in the pre-SSAO shading.
  
- ROOT CAUSES IDENTIFIED AND FIXED:
-      1. cube_to_dir Y/Z swap - FIXED (Issue 14 partial)
+ CURRENT METRICS:
+      - Fork luminance: 0.104 (official: 0.119)
+      - Brightness ratio: 0.89 (improved from 0.85)
+      - SSAO f_occ: 0.235 fork vs 0.233 official - MATCHES!
+      - Pre-SSAO shading: 0.89x of official - needs investigation
+      
+ ROOT CAUSES FIXED:
+      1. cube_to_dir Y/Z swap - FIXED
          - Corrected coordinate mappings to match nvdiffrec
          - Lighting direction now matches
-      
-      2. SSAO occlusion intensity - FIXED
-         - DRTK produces slightly different normals than nvdiffrast
-         - This causes ~12% more SSAO occlusion in fork
-         - Fixed by reducing intensity from 1.5 to 1.33
-         - SSAO occlusion now matches: fork f_occ ≈ 0.235 vs official ≈ 0.233
          
- REMAINING DIFFERENCE (~11%):
-      Pre-SSAO shading is ~11% darker in fork due to:
-      - Different normals from rasterization edge handling
-      - DRTK and nvdiffrast use different algorithms
-      - Edge pixels have slightly different barycentric interpolation
-      - This affects PBR dot products (NdotL, NdotV)
-      
-      This is EXPECTED BEHAVIOR - not a bug. Both renderers are correct,
-      they just produce slightly different results at triangle edges.
+      2. SSAO occlusion intensity - FIXED
+         - DRTK produces ~12% more SSAO occlusion than nvdiffrast
+         - Root cause: Different normals from edge handling
+         - Fixed by reducing intensity from 1.5 to 1.33
  
- CURRENT METRICS (after fixes):
-      - Base color mean: 8.527 (official: 8.534) - matches!
-      - Metallic mean: 60.762 (official: 60.779) - matches!
-      - Roughness mean: 13.545 (official: 13.543) - matches!
-      - Normal mean diff: 0.1949 - expected edge differences
-      - SSAO f_occ: 0.235 (fork) vs 0.233 (official) - matches!
-      - Pre-SSAO shading: 0.88x of official - expected edge effects
-      - Final shaded: 0.89x of official - acceptable
+ REMAINING INVESTIGATION (~11% pre-SSAO darkness):
+      The normals differ by ~0.12 mean due to different rasterization algorithms.
+      DRTK and nvdiffrast use different edge handling, causing slightly different
+      barycentric interpolation at triangle edges.
       
- SHADED OUTPUT:
-      - Fork luminance: 0.104 (official: 0.119)
-      - Brightness ratio: 0.89 (was 0.85 before SSAO fix)
-      - Per-channel ratio: R=0.89, G=0.87, B=0.90
- 
- FILES MODIFIED:
+      This affects PBR shading dot products:
+      - NdotL affects diffuse irradiance
+      - NdotV affects specular reflection
+      - Different normals → different lighting intensity
+      
+ POSSIBLE FIXES FOR NEXT AGENT:
+      1. **COMPARE shade() FUNCTION OUTPUTS**:
+         - Save intermediate values from PBREnvironmentLight.shade()
+         - Compare diffuse lookup with official's EnvironmentLight.shade()
+         - Compare specular prefilter values
+         - Check FG LUT sampling coordinates
+         
+      2. **INVESTIGATE NORMAL INTERPOLATION**:
+         - Compare world-space normals (gb_normal) between implementations
+         - Check if camera-space normals (gb_cam_normal) differ
+         - Normal calculation: `gb_normal = interpolate(face_normal, ...)`
+         - The official uses nvdiffrast's interpolate, we use DRTK's
+         - Could adjust normal vector magnitude or direction locally
+         
+      3. **PBR SHADING COMPONENTS**:
+         - diffuse = kd * irradiance * (1 - metallic)
+         - specular = ks * prefilter * FG_LUT(NdotV, roughness)
+         - Check each component's contribution
+         - FG_LUT might have different lookup if NdotV differs
+         
+      4. **DEBUG SCRIPTS** (already created):
+         - compare_ssao.py - compares SSAO occlusion
+         - analyze_shading.py - analyzes pre-SSAO shading
+         - check_shading_v2.py - detailed component analysis
+         - investigate_shading.py - normal and channel comparison
+  
+ FILES TO INVESTIGATE:
+      - trellis2/renderers/pbr_envmap.py:
+        * shade() function (line 604+)
+        * compute_diffuse_cubemap_vectorized() - irradiance calculation
+        * compute_specular_prefilter_vectorized() - specular prefilter
+        * FG LUT sampling in shade()
+        
+      - trellis2/renderers/pbr_mesh_renderer.py:
+        * Normal interpolation (line 337)
+        * PBREnvironmentLight.shade() call (line 465-475)
+        * Compare with official's EnvironmentLight.shade()
+  
+ KEY DATA POINTS:
+      - Normal difference: mean 0.12, per-channel: R=0.173, G=0.109, B=0.081
+      - This affects PBR dot products and lighting
+      - Pre-SSAO shading ratio: 0.89 (target: 1.0)
+      - Final shaded after SSAO fix: 0.89 (acceptable but not identical)
+  
+ TEST COMMANDS:
+      cd ~/Documents/AI/TRELLIS.2-commercial-use
+      trellis2: python compare_pbr.py
+      trellis2: conda run -n trellis2 python analyze_shading.py
+      
+ STRATEGY FOR NEXT AGENT:
+      1. Add debug output to shade() to save:
+         - kd, ks (input materials)
+         - pos, normal (input geometry)  
+         - diffuse irradiance lookup
+         - specular prefilter lookup
+         - FG LUT result
+         - NdotV value
+      2. Compare each component with official
+      3. Find WHERE the 11% loss occurs
+      4. Fix that specific component
+
+ FILES MODIFIED (so far):
       - trellis2/renderers/pbr_mesh_renderer.py:
         * cube_to_dir() corrected (line 33-56)
         * SSAO intensity adjusted from 1.5 to 1.33 (line 486-489)
@@ -481,47 +533,123 @@ VERIFICATION:
  2026-04-22 - Issue 14 - INVESTIGATION: Lighting appears inverted
  2026-04-22 - Issue 14 - ROOT CAUSE: cube_to_dir had Y/Z coordinates swapped
  2026-04-22 - Issue 14 - FIXED: Corrected cube_to_dir mapping
- 2026-04-22 - Issue 14 - REMAINING: ~15% darker output, likely SSAO depth scaling
+ 2026-04-22 - Issue 14 - REMAINING: ~15% darker output, SSAO and normals differ
+ 2026-04-23 - Issue 14 - INVESTIGATION: SSAO intensity too high due to different normals
+ 2026-04-23 - Issue 14 - FIXED: Reduced SSAO intensity from 1.5 to 1.33
+ 2026-04-23 - Issue 14 - IMPROVEMENT: Brightness 85% -> 89%, SSAO now matches
+ 2026-04-23 - Issue 14 - REMAINING: ~11% pre-SSAO darkness from PBR shading
+ 2026-04-23 - Issue 14 - NEXT: Compare shade() components, check normal interpolation
  
  ================================================================================
- CRITICAL FINDINGS FOR ISSUE 14 (2026-04-22 Updated)
+ CRITICAL FINDINGS FOR ISSUE 14 (2026-04-23 Updated)
  ================================================================================
  
- ## Status: PARTIALLY FIXED
+ ## Status: IN_PROGRESS - 89% brightness achieved, 11% remaining
  
- ### Root Cause FIXED
- The cube_to_dir function had incorrect coordinate mappings causing inverted lighting.
- Y and Z coordinates were swapped in multiple face projections.
+ ## Current State
+ - Brightness ratio improved from 85% to 89%
+ - SSAO occlusion now matches (f_occ: 0.235 fork vs 0.233 official)
+ - Pre-SSAO shading is 89% of official (investigating)
  
- ### Fix Applied
- Corrected cube_to_dir() in pbr_envmap.py and pbr_mesh_renderer.py to match nvdiffrec:
- - Face 0 (+X): (rx, ry, rz) = (1, -y, -x) instead of (1, -x, -y)
- - Face 1 (-X): (rx, ry, rz) = (-1, -y, x) instead of (-1, x, -y)
- - etc.
+ ## Fixes Applied
+ 1. **cube_to_dir Y/Z swap** - FIXED
+    - Y and Z coordinates were swapped in multiple face projections
+    - Corrected to match nvdiffrec's coordinate convention
+    - Lighting direction now matches (bright spots at top)
  
- Also fixed dir_to_cube_face_and_uv() to properly invert the mappings.
+ 2. **SSAO intensity** - FIXED  
+    - DRTK normals differ ~12% from nvdiffrast due to edge handling
+    - This caused 12% more SSAO occlusion
+    - Fixed by reducing intensity from 1.5 to 1.33
+    - Result: SSAO f_occ now matches within 1%
  
- ### Verification
- - Lighting direction now matches: bright spots in upper region
- - Material channels all match exactly
- - Brightness ratio: 0.853 (fork is ~15% darker)
+ ## Remaining Issue: ~11% Pre-SSAO Darkness
  
- ### Remaining Issue (NEEDS NEXT AGENT)
- Fork output is ~15% darker than official. Likely causes:
+ ### Root Cause Analysis
+ The normals differ by ~0.12 mean between DRTK and nvdiffrast:
+ ```
+ Normal comparison (camera space):
+   Fork:     mean normal diff components: R=0.173, G=0.109, B=0.081
+   Official: same (different rasterization at edges)
+   Mean diff: 0.12
+ ```
  
- 1. **SSAO DEPTH SCALING** (MOST LIKELY):
-    - DRTK uses camera-space z (~10.0)
-    - nvdiffrast uses normalized z/w (~0.82)
-    - SSAO radius=0.1 samples 12x larger relative area in nvdiffrast
-    - FIX: Scale SSAO radius by (10.0/0.82) ≈ 12.2
-    
- 2. Specular/diffuse prefilter may have accuracy differences
- 3. FG LUT coordinates may need adjustment
+ This affects PBR shading because:
+ 1. Normals are used for NdotL (diffuse) and NdotV (specular) dot products
+ 2. Different normals → different lighting intensity
+ 3. Pre-SSAO shading is 89% of official
  
- ### Recommended Next Steps
- 1. Disable SSAO and test - if brightness matches, SSAO is cause
- 2. Scale SSAO radius for DRTK camera-space depth
- 3. Compare intermediate diffuse/specular values with official
+ ### Key Data Points
+ ```
+ SSAO occlusion (f_occ):
+   Fork:     mean=0.235
+   Official: mean=0.233  
+   Ratio: 1.014 (MATCHES)
+
+ Clay (1 - f_occ):
+   Fork:     mean=0.765
+   Official: mean=0.767
+   Ratio: 0.997 (MATCHES)
+
+ Final luminance:
+   Fork:     mean=0.104
+   Official: mean=0.119
+   Ratio: 0.89
+
+ Pre-SSAO (shaded / clay):
+   Fork:     mean=0.148
+   Official: mean=0.167
+   Ratio: 0.89 (WHERE LOSS OCCURS)
+ ```
+ 
+ ### Investigation Plan for Next Agent
+ 
+ 1. **Add debug output to PBREnvironmentLight.shade()**:
+    ```python
+    # Save these values:
+    - kd, ks (input materials)
+    - pos, normal (input geometry)  
+    - diffuse_irradiance = self.sample(diffuse_dir)
+    - specular_prefilter = self.sample(reflect_dir, roughness)
+    - fg_result = self.fg_lut[NdotV, roughness]
+    - final_result = kd * diffuse * (1-metallic) + ks * specular * fg
+    ```
+ 
+ 2. **Compare each component**:
+    - Compare fork's diffuse irradiance with official's
+    - Compare fork's specular prefilter with official's
+    - Compare FG LUT lookup values
+    - Find WHERE the 11% is lost
+ 
+ 3. **Check normal interpolation**:
+    - gb_normal = interpolate(face_normal, rast, faces)
+    - Official uses dr.interpolate(), fork uses DRTK interpolate()
+    - Check if normals are identical at triangle centers
+    - Check if differences are only at edges (expected)
+    - Could re-normalize normals after interpolation
+ 
+ 4. **Debug scripts available**:
+    - compare_ssao.py - Compare SSAO occlusion values
+    - analyze_shading.py - Analyze shading components
+    - check_shading_v2.py - Detailed pre-SSAO analysis
+    - investigate_shading.py - Normal and channel comparison
+ 
+ ### Files to Modify
+ - trellis2/renderers/pbr_envmap.py - shade() function (line 604+)
+ - trellis2/renderers/pbr_mesh_renderer.py - normal interpolation (line 337)
+ 
+ ### Test Commands
+ ```bash
+ cd ~/Documents/AI/TRELLIS.2-commercial-use
+ # Run PBR test
+ TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py
+ 
+ # Compare brightness
+ python compare_pbr.py
+ 
+ # Analyze components  
+ python analyze_shading.py
+ ```
 
  ================================================================================
  CRITICAL FINDINGS FOR ISSUE 12 (2026-04-22 Updated)
