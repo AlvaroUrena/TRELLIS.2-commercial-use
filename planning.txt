@@ -172,131 +172,72 @@ RESULTS:
     PHASE 6: PBR RENDERER VERIFICATION
     ================================================================================
     
-    STATUS: COMPLETE - Brightness matches within ~5% tolerance
+    STATUS: COMPLETE
     
-    CONTEXT:
-       After MeshRenderer is verified, test PbrMeshRenderer which uses:
-       - DepthPeeler (DRTK) for multi-pass rasterization/depth peeling
-       - grid_sample_3d (flex_gemm) for sampling MeshWithVoxel attributes
-       - PBREnvironmentLight (pure PyTorch) for PBR shading - replaces nvdiffrec
-       - MeshWithVoxel attributes for material properties (base_color, metallic, roughness, alpha)
-
-    NOTE: This is NOT using DRTK for texture sampling. DRTK's texture() function
-          is only used for MeshWithPbrMaterial (UV-textured meshes), which is
-          different from the voxel-based pipeline tested here.
-
-    FILES TO CHECK:
-       - trellis2/renderers/pbr_mesh_renderer.py - Main PBR renderer
-       - trellis2/renderers/pbr_envmap.py - Pure PyTorch PBR environment lighting
-       - trellis2/renderers/pbr_envmap_data/bsdf_256_256.bin - Precomputed BSDF LUT
-       - trellis2/utils/drtk_compat.py - DepthPeeler class (for depth peeling)
-
-    KEY COMPONENTS VERIFIED:
+    All PBR rendering issues have been fixed. Brightness matches within ~5% tolerance.
+    
+    KEY FIXES:
         1. DepthPeeler.rasterize_next_layer() [DRTK]: ✓ FIXED (Issue 13)
-           - Now preserves original triangle IDs in rast[..., 3]
-           - interpolate() now correctly reconstructs index_img from rast
-    
         2. grid_sample_3d [flex_gemm]: ✓ FIXED (Issue 12)
-           - Root cause: Non-contiguous memory layout after reshape
-           - Fix: Added .contiguous() after reshape of xyz_voxel
-           - All PBR material channels now match official exactly
-    
         3. sample_cubemap_mip() [Pure PyTorch]: ✓ FIXED (Issue 14 partial)
-           - Root cause: Used global minimum mip level for ALL pixels
-           - Fix: Per-pixel mip level sampling with proper interpolation
-    
         4. cube_to_dir() [Pure PyTorch]: ✓ FIXED (Issue 14)
-           - Root cause: Coordinate convention mismatch
-           - Fix: Corrected to match nvdiffrast convention (Face 0=+X, 1=-X, 2=+Z, 3=-Z, 4=+Y, 5=-Y)
-           - Also fixed dir_to_cube_face_and_uv() to be proper inverse
-           - Lighting direction now matches nvdiffrast
-
         5. SSAO intensity [Pure PyTorch]: ✓ FIXED (Issue 14)
-           - Root cause: DRTK normals differ from nvdiffrast due to edge handling
-           - Fix: Reduced intensity from 1.5 to 1.33
-           - SSAO occlusion now matches
-
         6. Specular roughness blend [Pure PyTorch]: ✓ FIXED (Issue 14)
-           - Root cause: Missing `spec = torch.lerp(spec, diffuse, roughness)` in shade()
-           - This line blends specular toward diffuse for rough surfaces
-           - Fix: Added the lerp operation to match nvdiffrec behavior
-           - Brightness now matches within ~5% tolerance
+           - Missing `spec = torch.lerp(spec, diffuse, roughness)` in shade()
+           - This is required PBR behavior for rough surfaces
 
     FINAL METRICS:
-        - Brightness ratio: 1.03-1.05 (target: ~1.0)
-        - Pre-SSAO ratio: 1.01 (target: ~1.0)
-        - SSAO f_occ: 0.96-1.01 ratio (matches)
-        - Materials: Exact match
-        - Normal angle difference: 6.39° mean (acceptable for different rasterizers)
-        - Base color mean: 8.527 (official: 8.534) - matches!
-        - Metallic mean: 60.762 (official: 60.779) - matches!
-        - Roughness mean: 13.545 (official: 13.543) - matches!
-        - Alpha mean: 45.339 (official: 45.363) - matches!
+        - Brightness ratio: 1.03-1.05 (target: ~1.0) ✓
+        - Pre-SSAO ratio: 1.01 (target: ~1.0) ✓
+        - Materials: Exact match ✓
+        - Normal angle difference: 6.39° mean (acceptable) ✓
 
-    ACCEPTANCE CRITERIA MET:
-        - Materials match exactly ✓
-        - Mask coverage matches ✓
-        - Normal direction matches within rasterization tolerance ✓
-        - Final brightness ratio: 1.03-1.05 (within tolerance of 1.0) ✓
+    ================================================================================
+    PHASE 7: GLB EXPORT VERIFICATION
+    ================================================================================
 
-    TEST SCRIPTS CREATED:
-        - compare_pbr.py - Compare PBR output brightness
-        - check_shading_v2.py - Detailed pre-SSAO analysis
-        - debug_shade_components.py - Component analysis for shade() debugging
-        - analyze_pbr_shading.py - Component analysis
-        - test_cube_uv_consistency.py - Verify cubemap roundtrip
+    STATUS: READY FOR VERIFICATION
+    
+    CONTEXT:
+       After PBR rendering is verified, test GLB export which includes:
+       - Mesh geometry (vertices, faces)
+       - PBR materials (base_color, metallic, roughness textures)
+       - UV coordinates
+       - Material assignments
 
-   TEST VERIFICATION:
-       - Run: TRELLIS_DEBUG=1 conda run -n trellis2 python test_render_pbr.py
-       - Compare: python compare_pbr.py
-       - Analyze: python check_shading_v2.py
+    FILES TO CHECK:
+       - o-voxel/o_voxel/postprocess.py - to_glb() function
+       - trellis2/utils/glb_utils.py - GLB export utilities
+       - trellis2/pipelines/trellis2_image_to_3d.py - Pipeline export
 
-================================================================================
-PHASE 7: GLB EXPORT VERIFICATION
-================================================================================
+    KEY FIXES ALREADY APPLIED:
+        1. texture SLat normalization - ✓ FIXED
+           - sample_tex_slat() was using shape_slat_normalization
+           - Now uses tex_slat_normalization for correct colors
+        
+        2. GLB normal handling - ✓ FIXED
+           - Zero-length normals now use vertex position direction as fallback
+           - All normals normalized to unit length for glTF 2.0 compliance
+           - Fixed ACCESSOR_VECTOR3_NON_UNIT validation error
 
-STATUS: PENDING
+    TEST APPROACH:
+       1. Run inference: python example.py or python app.py
+       2. Export GLB file
+       3. Validate with glTF 2.0 validator: https://gltf-viewer.donmccurdy.com/
+       4. Load in Blender and compare visual quality
+       5. Compare GLB file sizes with official implementation
 
-CONTEXT:
-  After PBR rendering is verified, test GLB export which includes:
-  - Mesh geometry (vertices, faces)
-  - PBR materials (base_color, metallic, roughness textures)
-  - UV coordinates
-  - Material assignments
+    COMPARISON POINTS:
+       - GLB file should load without errors in Blender/Godot/etc.
+       - Materials should have base_color_texture, metallic_roughness_texture
+       - UV coordinates should be non-degenerate
+       - Vertex normals should be present and valid
+       - No glTF validation errors
 
-FILES TO CHECK:
-  - trellis2/utils/glb_utils.py - GLB export utilities
-  - o_voxel/postprocess/to_glb(...) - Main export function
-
-KEY FUNCTIONS:
-  1. o_voxel.postprocess.to_glb():
-     - Converts MeshWithVoxel to trimesh.Trimesh with PBR materials
-     - Bakes voxel attributes to textures
-     - Creates UV coordinates via xatlas
-
-  2. glb_utils.export_glb_fixed():
-     - Exports trimesh to GLB format
-     - Fixes bufferView targets for WebGL compatibility
-
-TEST APPROACH:
-  1. Create test_glb_export.py that generates a GLB file
-  2. Compare GLB file sizes between fork and official
-  3. Load both GLBs in a viewer (e.g., Blender) and compare visually
-  4. Check GLB structure with pygltflib:
-     - Verify materials array exists
-     - Verify textures exist
-     - Verify mesh.primitives have correct attributes
-
-COMPARISON POINTS:
-  - GLB file should load without errors in Blender/Godot/etc.
-  - Materials should have base_color_texture, metallic_roughness_texture
-  - UV coordinates should be non-degenerate
-  - Vertex normals should be present
-
-DEBUG FILES TO MONITOR:
-  - test_output_pbr/*.glb - Exported GLB files
-  - Compare file sizes (should be similar)
-  - Use `glb_validator` tool or pygltflib to inspect structure
+    DEBUG FILES TO MONITOR:
+       - test_output_pbr/*.glb - Exported GLB files
+       - Compare file sizes (should be similar)
+       - Use pygltflib to validate GLB structure
 
 ================================================================================
 TROUBLESHOOTING GUIDE

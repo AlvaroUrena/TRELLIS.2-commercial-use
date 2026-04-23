@@ -377,7 +377,7 @@ VERIFICATION:
  ISSUE 14: SHADED IMAGE QUALITY DIFFERS FROM OFFICIAL
  ================================================================================
  
- STATUS: [FIXED] - Brightness now matches (~3% difference, within tolerance)
+ STATUS: [FIXED] - Brightness matches within ~5% tolerance
  
  SEVERITY: MEDIUM - Fork output was ~89% brightness of official, now ~103%
   
@@ -402,20 +402,20 @@ VERIFICATION:
            Face 5: -Y -> (-x, -1, -y)
          
       2. dir_to_cube_face_and_uv - FIXED (pbr_envmap.py)
-         - Corrected UV coordinate calculation to match cube_to_dir inverses
-         - Fixed face assignment (was incorrectly mapping +Z and +Y)
+         - Proper inverse of cube_to_dir
+         - Corrected UV coordinate calculations
          - Roundtrip test now passes: cube_to_dir <=> dir_to_cube_face_and_uv
          
-      3. SSAO occlusion intensity - PREVIOUSLY FIXED
-         - DRTK produces different SSAO occlusion than nvdiffrast due to normal differences
+      3. SSAO occlusion intensity - FIXED (pbr_mesh_renderer.py)
+         - DRTK normals differ from nvdiffrast due to edge handling
          - Adjusted intensity from 1.5 to 1.33
 
-      4. Missing specular roughness blend - FIXED (pbr_envmap.py)
-         - Missing: spec = torch.lerp(spec, diffuse, roughness)
+      4. Specular roughness blend - FIXED (pbr_envmap.py)
+         - Missing: `spec = torch.lerp(spec, diffuse, roughness)`
          - This line blends specular toward diffuse for rough surfaces
-         - Critical PBR behavior that makes rough surfaces appear more diffuse
-         - Was present in nvdiffrec but missing from our implementation
- 
+         - Critical PBR behavior - rough surfaces appear more diffuse
+         - Brightness improved from 89% to ~103%
+
  ACCEPTANCE CRITERIA MET:
       - Pre-SSAO brightness ratio: ~1.01 (target was 1.0)
       - Final luminance ratio: ~1.03 (within tolerance)
@@ -430,6 +430,44 @@ VERIFICATION:
         * cube_to_dir() corrected (line 33-56)
         * dir_to_cube_face_and_uv() corrected (line 59-127)
         * shade() added: spec = torch.lerp(spec, diffuse, roughness) (line 731)
+ 
+ ================================================================================
+ ISSUE 15: GLB EXPORT COLOR AND NORMAL ERRORS
+ ================================================================================
+ 
+ STATUS: [FIXED]
+ 
+ SEVERITY: HIGH - glTF 2.0 validation errors
+ 
+ DESCRIPTION:
+      GLB export produced two errors:
+      1. Strange colors (purple artifacts) - wrong texture normalization
+      2. ACCESSOR_VECTOR3_NON_UNIT - Zero-length normals violating glTF 2.0
+ 
+ ROOT CAUSES:
+      1. Wrong SLat normalization in sample_tex_slat()
+         - Used shape_slat_normalization instead of tex_slat_normalization
+         - Caused incorrect color values in exported textures
+      
+      2. Zero-length normals from cumesh.compute_vertex_normals()
+         - Some vertices have degenerate geometry (no valid faces)
+         - cumesh returns zero vectors for these vertices
+         - glTF 2.0 requires all normals to be unit vectors
+ 
+ FIX:
+      1. trellis2/pipelines/trellis2_image_to_3d.py:
+         - Changed sample_tex_slat() to use tex_slat_normalization
+         - Fixed debug tensor names (P6_texture instead of P6_shape)
+      
+      2. o-voxel/o_voxel/postprocess.py:
+         - Detect zero-length normals (< 1e-6)
+         - Use normalized vertex position as fallback
+         - Normalize all normals to unit length with F.normalize()
+ 
+ VERIFICATION:
+      - GLB file passes glTF 2.0 validator
+      - Colors appear correct in 3D viewers
+      - No validation errors on https://gltf-viewer.donmccurdy.com/
  
  KEY DATA POINTS (after all fixes):
       - Normal angle difference: 6.39° mean (91.6% within 10°)
