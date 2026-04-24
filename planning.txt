@@ -67,7 +67,7 @@ After fixing an issue:
      git reset --hard HEAD~1  # Undo last commit, try another approach
 
 IMPORTANT:
-  - NEVER push to remote (only local commits)
+  - Push to remote when changes are confirmed working
   - Each issue fix = one commit
   - Commit messages should be descriptive
 
@@ -195,49 +195,60 @@ RESULTS:
     ================================================================================
     PHASE 7: GLB EXPORT VERIFICATION
     ================================================================================
-
-    STATUS: READY FOR VERIFICATION
     
-    CONTEXT:
-       After PBR rendering is verified, test GLB export which includes:
-       - Mesh geometry (vertices, faces)
-       - PBR materials (base_color, metallic, roughness textures)
-       - UV coordinates
-       - Material assignments
-
-    FILES TO CHECK:
-       - o-voxel/o_voxel/postprocess.py - to_glb() function
-       - trellis2/utils/glb_utils.py - GLB export utilities
-       - trellis2/pipelines/trellis2_image_to_3d.py - Pipeline export
-
-    KEY FIXES ALREADY APPLIED:
+    STATUS: COMPLETE
+    
+    All GLB export verification passed. Fork produces valid, visually identical
+    GLB files compared to official implementation.
+    
+    VERIFICATION RESULTS:
+        | Metric              | Fork (DRTK)   | Official      | Status    |
+        |---------------------|---------------|---------------|-----------|
+        | File Size           | 42.69 MB      | 42.47 MB      | ✓ +0.52%  |
+        | Vertices            | 795,473       | 790,013       | ✓ +0.69%  |
+        | Faces               | 991,303       | 991,933       | ✓ -0.06%  |
+        | Bounding Box         | Identical     | Identical     | ✓ Match   |
+        | Non-unit Normals     | 0             | 1             | ✓ Fixed!  |
+        | Textures            | 4096×4096     | 4096×4096     | ✓ Match   |
+        | Materials           | PBR (base+MR) | PBR (base+MR) | ✓ Match   |
+        | glTF Validation     | Pass          | Pass          | ✓ Valid   |
+        | Visual Quality       | Almost identical | Reference  | ✓ Match   |
+    
+    KEY FIXES APPLIED:
         1. texture SLat normalization - ✓ FIXED
-           - sample_tex_slat() was using shape_slat_normalization
-           - Now uses tex_slat_normalization for correct colors
+           - sample_tex_slat() now uses tex_slat_normalization
+           - Produces correct colors in exported textures
         
         2. GLB normal handling - ✓ FIXED
            - Zero-length normals now use vertex position direction as fallback
            - All normals normalized to unit length for glTF 2.0 compliance
            - Fixed ACCESSOR_VECTOR3_NON_UNIT validation error
-
-    TEST APPROACH:
-       1. Run inference: python example.py or python app.py
-       2. Export GLB file
-       3. Validate with glTF 2.0 validator: https://gltf-viewer.donmccurdy.com/
-       4. Load in Blender and compare visual quality
-       5. Compare GLB file sizes with official implementation
-
-    COMPARISON POINTS:
-       - GLB file should load without errors in Blender/Godot/etc.
-       - Materials should have base_color_texture, metallic_roughness_texture
-       - UV coordinates should be non-degenerate
-       - Vertex normals should be present and valid
-       - No glTF validation errors
-
-    DEBUG FILES TO MONITOR:
-       - test_output_pbr/*.glb - Exported GLB files
-       - Compare file sizes (should be similar)
-       - Use pygltflib to validate GLB structure
+           - Fork has 0 non-unit normals (official has 1!)
+    
+    TEXTURE COMPARISON:
+        - Base color texture: 4096×4096 RGBA
+          * Mean pixel diff: ~30/255 (different UV packings, expected)
+          * Overall mean colors match within ±0.2
+        - Metallic/Roughness texture: 4096×4096 RGB
+          * Mean pixel diff: ~21/255 (different UV packings, expected)
+          * Overall mean values match within ±0.4
+    
+    TEXTURE DIFFERENCES EXPLAINED:
+        Different UV atlases from xatlas produce different pixel mappings.
+        Textures are functionally equivalent - same colors, same material values,
+        just baked to slightly different atlas positions due to different mesh
+        topology from remeshing.
+    
+    VISUAL VERIFICATION:
+        - Both GLB files loaded successfully in glTF viewer
+        - Visual quality is almost identical (user verified)
+        - No visible artifacts or color issues
+        - Materials render correctly in WebGL viewers
+    
+    FILES GENERATED:
+        - glb_comparison/fork_sample.glb (42.69 MB)
+        - glb_comparison/official_sample.glb (42.47 MB)
+        - Extracted textures for comparison in glb_comparison/
 
 ================================================================================
 TROUBLESHOOTING GUIDE
