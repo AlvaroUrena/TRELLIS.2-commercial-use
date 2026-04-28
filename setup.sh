@@ -154,39 +154,10 @@ if [ "$FLASHATTN" = true ] ; then
     fi
 fi
 
-# Install DRTK (requires patches for CPU kernels and setuptools compatibility)
+# Install DRTK (differentiable renderer, MIT license)
 if [ "$DRTK" = true ] ; then
-    echo "[DRTK] Installing DRTK with patches for CPU kernel support..."
-    
-    ORIG_SETUPTOOLS=$(pip show setuptools 2>/dev/null | grep -oP '^Version: \K.*' || echo "82.0.1")
-    echo "[DRTK] Temporarily downgrading setuptools (required for pkg_resources)..."
-    pip install setuptools==69.5.1
-    
-    mkdir -p /tmp/extensions
-    rm -rf /tmp/extensions/DRTK
-    git clone https://github.com/facebookresearch/DRTK.git /tmp/extensions/DRTK
-    
-    # Patch setup.py to include missing CPU kernel sources
-    # 1. Add interpolate_kernel_cpu.cpp
-    sed -i 's|"src/interpolate/interpolate_kernel.cu",|"src/interpolate/interpolate_kernel.cu",\n                    "src/interpolate/interpolate_kernel_cpu.cpp",|' /tmp/extensions/DRTK/setup.py
-    
-    # 2. Add rasterize_kernel_cpu.cpp
-    sed -i 's|"src/rasterize/rasterize_kernel.cu",|"src/rasterize/rasterize_kernel.cu",\n                    "src/rasterize/rasterize_kernel_cpu.cpp",|' /tmp/extensions/DRTK/setup.py
-    
-    # 3. Add edge_grad_kernel_cpu.cpp
-    sed -i 's|"src/edge_grad/edge_grad_kernel.cu",|"src/edge_grad/edge_grad_kernel.cu",\n                    "src/edge_grad/edge_grad_kernel_cpu.cpp",|' /tmp/extensions/DRTK/setup.py
-    
-    # 4. Add render_kernel_cpu.cpp
-    sed -i 's|"src/render/render_kernel.cu", "src/render/render_module.cpp"|"src/render/render_kernel.cu", "src/render/render_module.cpp", "src/render/render_kernel_cpu.cpp"|' /tmp/extensions/DRTK/setup.py
-    
-    # 5. Patch cpu_atomic.h for C++17 compatibility (use reference instead of copy)
-    sed -i 's/auto target = detail::atomic_ref_at/auto\& target = detail::atomic_ref_at/g' /tmp/extensions/DRTK/src/include/cpu_atomic.h
-    
-    echo "[DRTK] Building DRTK (this may take a few minutes)..."
-    pip install /tmp/extensions/DRTK --no-build-isolation
-    
-    echo "[DRTK] Restoring setuptools to $ORIG_SETUPTOOLS..."
-    pip install setuptools=="$ORIG_SETUPTOOLS"
+    echo "[DRTK] Installing DRTK from prebuilt wheel..."
+    pip install https://github.com/GaXxO-dev/TRELLIS.2-commercial-use/releases/download/v0.1.0/drtk-0.1.0+cuda124-cp310-cp310-linux_x86_64.whl
 fi
 
 if [ "$CUMESH" = true ] ; then
