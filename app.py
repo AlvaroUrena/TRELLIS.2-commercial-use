@@ -478,6 +478,7 @@ def extract_glb(
     state: dict,
     decimation_target: int,
     texture_size: int,
+    extension_webp: bool,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
@@ -488,6 +489,7 @@ def extract_glb(
         state (dict): The state of the generated 3D model.
         decimation_target (int): The target face count for decimation.
         texture_size (int): The texture resolution.
+        extension_webp (bool): Whether to export GLB textures using WEBP.
 
     Returns:
         str: The path to the extracted GLB file.
@@ -514,7 +516,7 @@ def extract_glb(
     timestamp = now.strftime("%Y-%m-%dT%H%M%S") + f".{now.microsecond // 1000:03d}"
     os.makedirs(user_dir, exist_ok=True)
     glb_path = os.path.join(user_dir, f'sample_{timestamp}.glb')
-    glb_utils.export_glb_fixed(glb, glb_path, extension_webp=True)
+    glb_utils.export_glb_fixed(glb, glb_path, extension_webp=extension_webp)
     torch.cuda.empty_cache()
     return glb_path, glb_path
 
@@ -535,6 +537,7 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
             randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
             decimation_target = gr.Slider(100000, 1000000, label="Decimation Target", value=500000, step=10000)
             texture_size = gr.Slider(1024, 4096, label="Texture Size", value=2048, step=1024)
+            extension_webp = gr.Checkbox(label="Use WEBP GLB Extension", value=True)
             
             generate_btn = gr.Button("Generate")
                 
@@ -614,7 +617,7 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
         lambda: gr.Walkthrough(selected=1), outputs=walkthrough
     ).then(
         extract_glb,
-        inputs=[output_buf, decimation_target, texture_size],
+        inputs=[output_buf, decimation_target, texture_size, extension_webp],
         outputs=[glb_output, download_btn],
     )
         
